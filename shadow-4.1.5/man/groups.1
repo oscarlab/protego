@@ -1,0 +1,56 @@
+'\" t
+.\"     Title: groups
+.\"    Author: [FIXME: author] [see http://docbook.sf.net/el/author]
+.\" Generator: DocBook XSL Stylesheets v1.75.2 <http://docbook.sf.net/>
+.\"      Date: 02/12/2012
+.\"    Manual: User Commands
+.\"    Source: shadow-utils 4.1.5
+.\"  Language: English
+.\"
+.TH "GROUPS" "1" "02/12/2012" "shadow\-utils 4\&.1\&.5" "User Commands"
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+groups \- display current group names
+.SH "SYNOPSIS"
+.HP \w'\fBgroups\fR\ 'u
+\fBgroups\fR [\fIuser\fR]
+.SH "DESCRIPTION"
+.PP
+The
+\fBgroups\fR
+command displays the current group names or ID values\&. If the value does not have a corresponding entry in
+/etc/group, the value will be displayed as the numerical group value\&. The optional
+\fIuser\fR
+parameter will display the groups for the named
+\fIuser\fR\&.
+.SH "NOTE"
+.PP
+Systems which do not support concurrent group sets will have the information from
+/etc/group
+reported\&. The user must use
+\fBnewgrp\fR
+or
+\fBsg\fR
+to change his current real and effective group ID\&.
+.SH "FILES"
+.PP
+/etc/group
+.RS 4
+Group account information\&.
+.RE
+.SH "SEE ALSO"
+.PP
+
+\fBnewgrp\fR(1),
+\fBgetgid\fR(2),
+\fBgetgroups\fR(2),
+\fBgetuid\fR(2)\&.

@@ -1,0 +1,2449 @@
+diff --git a/linux-stable/drivers/net/ppp/ppp_generic.c b/linux-stable/drivers/net/ppp/ppp_generic.c
+index 5c05572..12e9fb7 100644
+--- a/linux-stable/drivers/net/ppp/ppp_generic.c
++++ b/linux-stable/drivers/net/ppp/ppp_generic.c
+@@ -366,8 +366,8 @@ static int ppp_open(struct inode *inode, struct file *file)
+ 	/*
+ 	 * This could (should?) be enforced by the permissions on /dev/ppp.
+ 	 */
+-	if (!capable(CAP_NET_ADMIN))
+-		return -EPERM;
++//	if (!capable(CAP_NET_ADMIN))
++//		return -EPERM;
+ 	return 0;
+ }
+ 
+diff --git a/linux-stable/fs/exec.c b/linux-stable/fs/exec.c
+index 574cf4d..9772ee5 100644
+--- a/linux-stable/fs/exec.c
++++ b/linux-stable/fs/exec.c
+@@ -1475,6 +1475,8 @@ static int do_execve_common(const char *filename,
+ 	int retval;
+ 	const struct cred *cred = current_cred();
+ 
++//	Bhushan: add check to see if task was setuid and current exec is allowed. send cred. read the old cred and is setuid from the security field of task.
++
+ 	/*
+ 	 * We move the actual failure in case of RLIMIT_NPROC excess from
+ 	 * set*uid() to execve() because too many poorly written programs
+@@ -1515,6 +1517,13 @@ static int do_execve_common(const char *filename,
+ 	if (IS_ERR(file))
+ 		goto out_unmark;
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++		if(security_exec_on_setuid_allowed(cred->euid, file))
++		{
++			retval = -EPERM;
++			goto out_unmark;
++		}
++#endif
+ 	sched_exec();
+ 
+ 	bprm->file = file;
+diff --git a/linux-stable/fs/namespace.c b/linux-stable/fs/namespace.c
+index 4d31f73..281dc44 100644
+--- a/linux-stable/fs/namespace.c
++++ b/linux-stable/fs/namespace.c
+@@ -1248,6 +1248,8 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 	struct mount *mnt;
+ 	int retval;
+ 	int lookup_flags = 0;
++	const struct cred *curr_cred = current_cred();
++	char *user_path;
+ 
+ 	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+ 		return -EINVAL;
+@@ -1266,9 +1268,15 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 		goto dput_and_out;
+ 
+ 	retval = -EPERM;
++	user_path = (char *)vmalloc(strlen(name)+1);
++	memset(user_path, 0, strlen(name)+1);
++       copy_from_user(user_path, name, strlen(name)+1);
++	if (security_umount_allowed(user_path,curr_cred->euid))
++		goto dput_and_out;
++#ifndef CONFIG_PROTEGO_SECURITY
+ 	if (!capable(CAP_SYS_ADMIN))
+ 		goto dput_and_out;
+-
++#endif
+ 	retval = do_umount(mnt, flags);
+ dput_and_out:
+ 	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
+@@ -2405,6 +2413,7 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
+ 	char *kernel_dir;
+ 	char *kernel_dev;
+ 	unsigned long data_page;
++	const struct cred *curr_cred = current_cred();
+ 
+ 	ret = copy_mount_string(type, &kernel_type);
+ 	if (ret < 0)
+@@ -2424,6 +2433,10 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
+ 	if (ret < 0)
+ 		goto out_data;
+ 
++	ret = security_mount_allowed(kernel_dev,kernel_dir,curr_cred->euid);
++	if (ret != 0)
++		goto out_data;
++
+ 	ret = do_mount(kernel_dev, kernel_dir, kernel_type, flags,
+ 		(void *) data_page);
+ 
+diff --git a/linux-stable/fs/open.c b/linux-stable/fs/open.c
+index e1f2cdb..50f3bf5 100644
+--- a/linux-stable/fs/open.c
++++ b/linux-stable/fs/open.c
+@@ -947,9 +947,22 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
+ 	int lookup = build_open_flags(flags, mode, &op);
+ 	char *tmp = getname(filename);
+ 	int fd = PTR_ERR(tmp);
++	const struct cred *cred = current_cred();
+ 
+ 	if (!IS_ERR(tmp)) {
+ 		fd = get_unused_fd_flags(flags);
++#ifdef CONFIG_PROTEGO_SECURITY
++		if(flags & O_WRONLY)
++		{
++			if(!(flags & O_CREAT) || !(flags & O_EXCL))
++			{
++				if(security_write_on_sudoedit_allowed(cred->euid, tmp))
++				{
++					fd = PTR_ERR(ERR_PTR(-EPERM));
++				}
++			}
++		}
++#endif
+ 		if (fd >= 0) {
+ 			struct file *f = do_filp_open(dfd, tmp, &op, lookup);
+ 			if (IS_ERR(f)) {
+diff --git a/linux-stable/fs/proc/Makefile b/linux-stable/fs/proc/Makefile
+index c1c7293..93ead3c 100644
+--- a/linux-stable/fs/proc/Makefile
++++ b/linux-stable/fs/proc/Makefile
+@@ -19,6 +19,7 @@ proc-y	+= meminfo.o
+ proc-y	+= stat.o
+ proc-y	+= uptime.o
+ proc-y	+= version.o
++proc-y	+= procmodule.o
+ proc-y	+= softirqs.o
+ proc-y	+= namespaces.o
+ proc-$(CONFIG_PROC_SYSCTL)	+= proc_sysctl.o
+diff --git a/linux-stable/fs/proc/procmodule.c b/linux-stable/fs/proc/procmodule.c
+new file mode 100644
+index 0000000..bb923c2
+--- /dev/null
++++ b/linux-stable/fs/proc/procmodule.c
+@@ -0,0 +1,358 @@
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/proc_fs.h>
++#include <linux/string.h>
++#include <linux/vmalloc.h>
++#include <asm/uaccess.h>
++#include <linux/setuid_policies.h>
++
++#define MAX_LEN       4096
++int setuid_read_info( char *page, char **start, off_t off,int count, int *eof, void *data );
++int setuid_write_info( struct file *filp, const char __user *buff,unsigned long len, void *data );
++int mount_read_info( char *page, char **start, off_t off,int count, int *eof, void *data );
++int mount_write_info( struct file *filp, const char __user *buff,unsigned long len, void *data );
++int bind_read_info( char *page, char **start, off_t off,int count, int *eof, void *data );
++int bind_write_info( struct file *filp, const char __user *buff,unsigned long len, void *data );
++int pppd_read_info( char *page, char **start, off_t off,int count, int *eof, void *data );
++int pppd_write_info( struct file *filp, const char __user *buff,unsigned long len, void *data );
++
++static struct proc_dir_entry *policy_dir, *setuid_entry, *mount_entry, *bind_entry, *pppd_entry;
++struct sudoers_info *sudoers_head = NULL;
++struct fstab_info *fstab_head = NULL;
++struct bind_info *bind_head = NULL;
++int pppd_defaultroute = 1;
++
++static int __init init_module(void)
++{
++	int ret = 0;
++
++	/* create the dir policy/ */
++	policy_dir = proc_mkdir("policy", NULL);
++	/* create the setuid/ and mount/ directories */
++	setuid_entry = create_proc_entry("setuid", 0640, policy_dir);
++	mount_entry = create_proc_entry("mount", 0640, policy_dir);
++	bind_entry = create_proc_entry("bind", 0640, policy_dir);
++	pppd_entry = create_proc_entry("pppd", 0640, policy_dir);
++
++	setuid_entry->read_proc = setuid_read_info;
++	setuid_entry->write_proc = setuid_write_info;
++	mount_entry->read_proc = mount_read_info;
++	mount_entry->write_proc = mount_write_info;
++	bind_entry->read_proc = bind_read_info;
++	bind_entry->write_proc = bind_write_info;
++	pppd_entry->read_proc = pppd_read_info;
++	pppd_entry->write_proc = pppd_write_info;
++//	printk(KERN_INFO "procEntry created.\n");
++//	printk(KERN_INFO "List size is %lu.\n",sizeof(struct list_head));
++
++	return ret;
++}
++
++void cleanup_module( void )
++{
++	struct sudoers_info *tmp;
++	struct fstab_info *tmpfs;
++	struct bind_info *tmpbind;
++	struct list_head *pos, *q;
++       remove_proc_entry("setuid", policy_dir);
++       remove_proc_entry("mount", policy_dir);
++       remove_proc_entry("bind", policy_dir);
++       remove_proc_entry("pppd", policy_dir);
++       remove_proc_entry("policy", NULL);
++	printk(KERN_INFO "procEntry unloaded.\n");
++	if(sudoers_head != NULL)
++	{
++		list_for_each_safe(pos, q, &sudoers_head->list){
++			tmp = list_entry(pos, struct sudoers_info, list);
++			list_del(pos);
++			vfree(tmp->commands);
++			vfree(tmp);
++		}
++	}
++	if(fstab_head != NULL)
++	{
++		list_for_each_safe(pos, q, &fstab_head->list){
++			tmpfs = list_entry(pos, struct fstab_info, list);
++			list_del(pos);
++			vfree(tmpfs->source);
++			vfree(tmpfs->dest);
++			vfree(tmpfs);
++		}
++	}
++
++	if(bind_head != NULL)
++	{
++		list_for_each_safe(pos, q, &bind_head->list){
++			tmpbind = list_entry(pos, struct bind_info, list);
++			list_del(pos);
++			vfree(tmpbind->path);
++			vfree(tmpbind);
++		}
++	}
++}
++
++int setuid_write_info(struct file *filp, const char __user *buff, unsigned long len, void *data)
++{
++	struct sudoers_info *sudoers_object = (struct sudoers_info *)vmalloc(sizeof(struct sudoers_info));
++	char* command;
++	memset(sudoers_object, 0, sizeof(struct sudoers_info));
++	if(len != sizeof(struct sudoers_info))
++	{
++//		printk(KERN_INFO "buffer length is not as expected. Expected length is %lu. Received length is %lu\n",sizeof(struct sudoers_info),len);
++		return -1;
++	}
++       if(copy_from_user(sudoers_object, buff, len))
++       {
++//	    printk(KERN_INFO "Copying from user failed.\n");
++           return -2;
++       }
++       command = (char *)vmalloc(strlen(sudoers_object->commands)+1);
++	memset(command, 0, strlen(sudoers_object->commands)+1);
++       if(copy_from_user(command, sudoers_object->commands, strlen(sudoers_object->commands)+1))
++       {
++//	    printk(KERN_INFO "Copying commands from user failed.\n");
++           return -2;
++       }
++       sudoers_object->commands = command;
++
++//	printk(KERN_INFO "Received data ..... %d,%d,%d,%d,%s.\n",sudoers_object->original_uid,sudoers_object->runas_uid,sudoers_object->nopass,sudoers_object->sudoedit,sudoers_object->commands);
++   	INIT_LIST_HEAD(&sudoers_object->list);
++
++   	if(sudoers_head == NULL)
++       {
++//	   printk(KERN_INFO "Head null. configuring head.\n");
++    	   sudoers_head = sudoers_object;
++       }
++       else
++       {
++    	   list_add(&(sudoers_object->list), &(sudoers_head->list));
++       }
++
++       if(sudoers_head == NULL)
++       {
++//	   printk(KERN_INFO "Head is still null. write failed.\n");
++	   return -3;
++       }
++
++       return len;
++}
++
++int setuid_read_info(char *page, char **start, off_t off, int count, int *eof, void *data)
++{
++    struct sudoers_info *tmp;
++    int len = 0;
++    if (off > 0)
++    {
++        *eof = 1;
++        return 0;
++    }
++//  printk(KERN_INFO "Read called.\n");
++    len += sprintf(page, "%s\t%s\t%s\t%s\t\t%s\n", "Original", "RunAs ID", "NOPASSWD", "SUDOEDIT", "Commands");
++    if(sudoers_head != NULL)
++    {
++//		printk(KERN_INFO "Head is NOT null. Printing .... \n");
++		len += sprintf(page+len,"%d\t\t%d\t\t%d\t\t%d\t\t%s\n", sudoers_head->original_uid, sudoers_head->runas_uid, sudoers_head->nopass, sudoers_head->sudoedit, sudoers_head->commands);
++		list_for_each_entry(tmp, &sudoers_head->list, list)
++		{
++//			printk(KERN_INFO "Inside list traversal .... \n");
++			len += sprintf(page+len,"%d\t\t%d\t\t%d\t\t%d\t\t%s\n", tmp->original_uid, tmp->runas_uid, tmp->nopass, tmp->sudoedit, tmp->commands);
++		}
++    }
++    else
++    {
++//		printk(KERN_INFO "Head is null.\n");
++    }
++
++    return len;
++}
++
++int mount_write_info(struct file *filp, const char __user *buff, unsigned long len, void *data)
++{
++	struct fstab_info *fstab_object = (struct fstab_info *)vmalloc(sizeof(struct fstab_info));
++	char *src, *dst;
++	memset(fstab_object, 0, sizeof(struct fstab_info));
++	if(len != sizeof(struct fstab_info))
++	{
++//		printk(KERN_INFO "buffer length is not as expected. Expected length is %lu. Received length is %lu\n",sizeof(struct fstab_info),len);
++		return -1;
++	}
++    if(copy_from_user(fstab_object, buff, len))
++    {
++//		printk(KERN_INFO "Copying from user failed.\n");
++        return -2;
++    }
++    src = (char *)vmalloc(strlen(fstab_object->source)+1);
++	memset(src, 0, strlen(fstab_object->source)+1);
++    if(copy_from_user(src, fstab_object->source, strlen(fstab_object->source)+1))
++    {
++//		printk(KERN_INFO "Copying source from user failed.\n");
++        return -2;
++    }
++    fstab_object->source = src;
++
++    dst = (char *)vmalloc(strlen(fstab_object->dest)+1);
++	memset(dst, 0, strlen(fstab_object->dest)+1);
++    if(copy_from_user(dst, fstab_object->dest, strlen(fstab_object->dest)+1))
++    {
++//		printk(KERN_INFO "Copying destination from user failed.\n");
++        return -2;
++    }
++    fstab_object->dest = dst;
++
++//    printk(KERN_INFO "Received data ..... %s,%s,%d.\n",fstab_object->source,fstab_object->dest,fstab_object->is_user);
++   	INIT_LIST_HEAD(&fstab_object->list);
++
++   	if(fstab_head == NULL)
++    {
++//		printk(KERN_INFO "Head null. configuring head.\n");
++    	fstab_head = fstab_object;
++    }
++    else
++    {
++    	list_add(&(fstab_object->list), &(fstab_head->list));
++    }
++
++    if(fstab_head == NULL)
++    {
++//		printk(KERN_INFO "Head is still null. write failed.\n");
++		return -3;
++    }
++
++    return len;
++}
++
++int mount_read_info(char *page, char **start, off_t off, int count, int *eof, void *data)
++{
++	struct fstab_info *tmp;
++    int len = 0;
++    if (off > 0)
++    {
++        *eof = 1;
++        return 0;
++    }
++//	printk(KERN_INFO "Read called.\n");
++	len += sprintf(page, "%s\t%s\t%s\n", "Source", "Destination", "ISUSER");
++	if(fstab_head != NULL)
++	{
++//		printk(KERN_INFO "Head is NOT null. Printing .... \n");
++		len += sprintf(page+len,"%s\t%s\t%d\n", fstab_head->source, fstab_head->dest, fstab_head->is_user);
++		list_for_each_entry(tmp, &fstab_head->list, list)
++		{
++//			printk(KERN_INFO "Inside list traversal .... \n");
++			len += sprintf(page+len,"%s\t%s\t%d\n", tmp->source, tmp->dest, tmp->is_user);
++		}
++	}
++	else
++	{
++//		printk(KERN_INFO "Head is null.\n");
++	}
++
++    return len;
++}
++
++int bind_write_info(struct file *filp, const char __user *buff, unsigned long len, void *data)
++{
++	struct bind_info *bind_object = (struct bind_info *)vmalloc(sizeof(struct bind_info));
++	char* path;
++	memset(bind_object, 0, sizeof(struct bind_info));
++	if(len != sizeof(struct bind_info))
++	{
++//		printk(KERN_INFO "buffer length is not as expected. Expected length is %lu. Received length is %lu\n",sizeof(struct bind_info),len);
++		return -1;
++	}
++    if(copy_from_user(bind_object, buff, len))
++    {
++//		printk(KERN_INFO "Copying from user failed.\n");
++        return -2;
++    }
++    path = (char *)vmalloc(strlen(bind_object->path)+1);
++	memset(path, 0, strlen(bind_object->path)+1);
++    if(copy_from_user(path, bind_object->path, strlen(bind_object->path)+1))
++    {
++//		printk(KERN_INFO "Copying path from user failed.\n");
++        return -2;
++    }
++    bind_object->path = path;
++
++//	printk(KERN_INFO "Received data ..... %d,%d,%s.\n",bind_object->port,bind_object->user,bind_object->path);
++   	INIT_LIST_HEAD(&bind_object->list);
++
++   	if(bind_head == NULL)
++    {
++//		printk(KERN_INFO "Head null. configuring head.\n");
++    	bind_head = bind_object;
++    }
++    else
++    {
++    	list_add(&(bind_object->list), &(bind_head->list));
++    }
++
++    if(bind_head == NULL)
++    {
++//		printk(KERN_INFO "Head is still null. write failed.\n");
++		return -3;
++    }
++
++    return len;
++}
++
++int bind_read_info(char *page, char **start, off_t off, int count, int *eof, void *data)
++{
++	struct bind_info *tmp;
++    int len = 0;
++    if (off > 0)
++    {
++        *eof = 1;
++        return 0;
++    }
++//	printk(KERN_INFO "Read called.\n");
++	len += sprintf(page, "%s\t%s\t%s\n", "Port", "User ID", "Path");
++	if(bind_head != NULL)
++	{
++//		printk(KERN_INFO "Head is NOT null. Printing .... \n");
++		len += sprintf(page+len,"%d\t\t%d\t\t%s\n", bind_head->port, bind_head->user, bind_head->path);
++		list_for_each_entry(tmp, &bind_head->list, list)
++		{
++			printk(KERN_INFO "Inside list traversal .... \n");
++			len += sprintf(page+len,"%d\t\t%d/t/t%s\n", tmp->port, tmp->user, tmp->path);
++		}
++	}
++	else
++	{
++//		printk(KERN_INFO "Head is null.\n");
++	}
++
++    return len;
++}
++
++int pppd_write_info(struct file *filp, const char __user *buff, unsigned long len, void *data)
++{
++	if(len != sizeof(pppd_defaultroute))
++	{
++//		printk(KERN_INFO "buffer length is not as expected. Expected length is %lu. Received length is %lu\n",sizeof(struct bind_info),len);
++		return -1;
++	}
++    if(copy_from_user(&pppd_defaultroute, buff, len))
++    {
++//		printk(KERN_INFO "Copying from user failed.\n");
++        return -2;
++    }
++    return len;
++}
++
++int pppd_read_info(char *page, char **start, off_t off, int count, int *eof, void *data)
++{
++    int len = 0;
++    if (off > 0)
++    {
++        *eof = 1;
++        return 0;
++    }
++//	printk(KERN_INFO "Read called.\n");
++	len += sprintf(page, "%s\n", "Default Route");
++//		printk(KERN_INFO "Head is NOT null. Printing .... \n");
++	len += sprintf(page+len,"%d\n", pppd_defaultroute);
++    return len;
++}
++module_init(init_module);
+diff --git a/linux-stable/include/linux/netfilter_ipv4.h b/linux-stable/include/linux/netfilter_ipv4.h
+index e2b1280..d42693e 100644
+--- a/linux-stable/include/linux/netfilter_ipv4.h
++++ b/linux-stable/include/linux/netfilter_ipv4.h
+@@ -62,6 +62,7 @@ enum nf_ip_hook_priorities {
+ 	NF_IP_PRI_CONNTRACK = -200,
+ 	NF_IP_PRI_MANGLE = -150,
+ 	NF_IP_PRI_NAT_DST = -100,
++	NF_IP_PRI_RAWSOCKET = -10,
+ 	NF_IP_PRI_FILTER = 0,
+ 	NF_IP_PRI_SECURITY = 50,
+ 	NF_IP_PRI_NAT_SRC = 100,
+diff --git a/linux-stable/include/linux/netfilter_ipv4/ipt_RAWSOCKET.h b/linux-stable/include/linux/netfilter_ipv4/ipt_RAWSOCKET.h
+index ee473c8..e1e39f2 100644
+--- a/linux-stable/include/linux/netfilter_ipv4/ipt_RAWSOCKET.h
++++ b/linux-stable/include/linux/netfilter_ipv4/ipt_RAWSOCKET.h
+@@ -8,10 +8,10 @@
+ #ifndef IPT_RAWSOCKET_H_
+ #define IPT_RAWSOCKET_H_
+ #include <stdbool.h>
+-//#include <linux/in.h>
+ 
+ struct xt_raw_socket_tg_info {
+         bool allowed_raw_sock_proto[IPPROTO_MAX];
++        long allowed_uid;
+ };
+ 
+ 
+diff --git a/linux-stable/include/linux/sched.h b/linux-stable/include/linux/sched.h
+index b8c8664..a482bf5 100644
+--- a/linux-stable/include/linux/sched.h
++++ b/linux-stable/include/linux/sched.h
+@@ -1238,7 +1238,7 @@ struct task_struct {
+ 	atomic_t usage;
+ 	unsigned int flags;	/* per process flags, defined below */
+ 	unsigned int ptrace;
+-
++	struct  timespec last_auth;
+ #ifdef CONFIG_SMP
+ 	struct llist_node wake_entry;
+ 	int on_cpu;
+diff --git a/linux-stable/include/linux/security.h b/linux-stable/include/linux/security.h
+index 3dea6a9..ef5e5c9 100644
+--- a/linux-stable/include/linux/security.h
++++ b/linux-stable/include/linux/security.h
+@@ -26,6 +26,7 @@
+ #include <linux/capability.h>
+ #include <linux/slab.h>
+ #include <linux/err.h>
++#include <linux/uidgid.h>
+ 
+ struct linux_binprm;
+ struct cred;
+@@ -1391,6 +1392,16 @@ struct security_operations {
+ 		       const kernel_cap_t *permitted);
+ 	int (*capable) (const struct cred *cred, struct user_namespace *ns,
+ 			int cap, int audit);
++#ifdef CONFIG_PROTEGO_SECURITY
++	int (*setuid_allowed) (kuid_t old, kuid_t new);
++	int (*exec_on_setuid_allowed) (kuid_t new, struct file *file);
++	int (*write_on_sudoedit_allowed) (kuid_t new, char *file);
++	int (*setgid_allowed) (struct cred *old, struct cred *new);
++	int (*mount_allowed) (char* source, char* dest, kuid_t user);
++	int (*defaultroute) (void);
++	int (*pppd) (void);
++	int (*umount_allowed) (char* path, kuid_t user);
++#endif
+ 	int (*quotactl) (int cmds, int type, int id, struct super_block *sb);
+ 	int (*quota_on) (struct dentry *dentry);
+ 	int (*syslog) (int type);
+@@ -2816,6 +2827,57 @@ static inline void security_skb_classify_flow(struct sk_buff *skb, struct flowi
+ 
+ #endif	/* CONFIG_SECURITY_NETWORK_XFRM */
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++int security_setuid_allowed(kuid_t old, kuid_t new);
++int security_exec_on_setuid_allowed (kuid_t new, struct file *file);
++int security_write_on_sudoedit_allowed (kuid_t new, char *file);
++int security_setgid_allowed(struct cred *old, struct cred *new);
++int security_mount_allowed(char* source, char* dest, kuid_t user);
++int security_defaultroute(void);
++int security_pppd(void);
++int security_umount_allowed(char* path, kuid_t user);
++#else
++static inline int security_setuid_allowed(kuid_t old, kuid_t new)
++{
++	return 0;
++}
++
++static inline int security_exec_on_setuid_allowed(kuid_t new, struct file *file)
++{
++	return 0;
++}
++
++static inline int security_write_on_sudoedit_allowed(kuid_t new, char *file)
++{
++	return 0;
++}
++
++static inline int security_setgid_allowed(struct cred *old, struct cred *new)
++{
++	return 0;
++}
++
++static inline int security_mount_allowed(char* source, char* dest, kuid_t user)
++{
++	return 0;
++}
++
++static inline int security_defaultroute(void)
++{
++	return 0;
++}
++
++static inline int security_pppd(void)
++{
++	return 0;
++}
++
++static inline int security_umount_allowed(char* path, kuid_t user)
++{
++	return 0;
++}
++#endif
++
+ #ifdef CONFIG_SECURITY_PATH
+ int security_path_unlink(struct path *dir, struct dentry *dentry);
+ int security_path_mkdir(struct path *dir, struct dentry *dentry, umode_t mode);
+diff --git a/linux-stable/include/linux/setuid_policies.h b/linux-stable/include/linux/setuid_policies.h
+new file mode 100644
+index 0000000..a76e5ce
+--- /dev/null
++++ b/linux-stable/include/linux/setuid_policies.h
+@@ -0,0 +1,43 @@
++#ifndef __SETUID_POLICIES_H__
++#define __SETUID_POLICIES_H__
++
++#include <linux/uidgid.h>
++#include <linux/list.h>
++struct sudoers_info
++{
++	/* User who is allowed to execute sudo  - should not be invalid*/
++	kuid_t original_uid;
++	/* user to which su is allowed  - can be invalid*/
++	kuid_t runas_uid;
++	/* comma separated commands that user can execute  - can be null to indicate all commands*/
++	char* commands;
++	/* is NOPASSWD flag mentioned?*/
++	int nopass;
++	/* is sudoedit flag mentioned?*/
++	int sudoedit;
++
++	struct list_head list; /* kernel's list structure */
++};
++
++struct fstab_info
++{
++	char* source;
++	char* dest;
++	int is_user;
++    struct list_head list; /* kernel's list structure */
++};
++
++struct bind_info
++{
++	int port;
++	kuid_t user;
++	char *path;
++    struct list_head list; /* kernel's list structure */
++};
++
++extern int pppd_defaultroute;
++extern struct sudoers_info *sudoers_head;
++extern struct fstab_info *fstab_head;
++extern struct bind_info *bind_head;
++
++#endif /* __SETUID_POLICIES_H__ */
+diff --git a/linux-stable/include/net/netns/ipv4.h b/linux-stable/include/net/netns/ipv4.h
+index 1474dd6..b781112 100644
+--- a/linux-stable/include/net/netns/ipv4.h
++++ b/linux-stable/include/net/netns/ipv4.h
+@@ -44,6 +44,7 @@ struct netns_ipv4 {
+ 	struct netns_frags	frags;
+ #ifdef CONFIG_NETFILTER
+ 	struct xt_table		*iptable_filter;
++	struct xt_table		*iptable_rawsocket;
+ 	struct xt_table		*iptable_mangle;
+ 	struct xt_table		*iptable_raw;
+ 	struct xt_table		*arptable_filter;
+diff --git a/linux-stable/kernel/capability.c b/linux-stable/kernel/capability.c
+index 493d972..e49c5a2 100644
+--- a/linux-stable/kernel/capability.c
++++ b/linux-stable/kernel/capability.c
+@@ -440,3 +440,40 @@ bool inode_capable(const struct inode *inode, int cap)
+ 
+ 	return ns_capable(ns, cap) && kuid_has_mapping(ns, inode->i_uid);
+ }
++/*
++bool setuid_allowed(kuid_t old, kuid_t new)
++{
++	return (security_setuid_allowed(old, new) != 0);
++}
++EXPORT_SYMBOL(setuid_allowed);
++
++bool exec_on_setuid_allowed(kuid_t new, struct file *file)
++{
++	return (security_exec_on_setuid_allowed(new, file) != 0);
++}
++EXPORT_SYMBOL(exec_on_setuid_allowed);
++
++bool write_on_sudoedit_allowed(kuid_t new, char *file)
++{
++	return (security_write_on_sudoedit_allowed(new, file) != 0);
++}
++EXPORT_SYMBOL(write_on_sudoedit_allowed);
++
++bool setgid_allowed(struct cred *old, struct cred *new)
++{
++	return (security_setgid_allowed(old, new) != 0);
++}
++EXPORT_SYMBOL(setgid_allowed);
++
++bool mount_allowed(char* source, char* dest, kuid_t user)
++{
++	return (security_mount_allowed(source, dest, user) != 0);
++}
++EXPORT_SYMBOL(mount_allowed);
++
++bool umount_allowed(char* path, kuid_t user)
++{
++	return (security_umount_allowed(path, user) != 0);
++}
++EXPORT_SYMBOL(umount_allowed);
++*/
+diff --git a/linux-stable/kernel/fork.c b/linux-stable/kernel/fork.c
+index 2c8857e..741de5e 100644
+--- a/linux-stable/kernel/fork.c
++++ b/linux-stable/kernel/fork.c
+@@ -70,6 +70,7 @@
+ #include <linux/khugepaged.h>
+ #include <linux/signalfd.h>
+ #include <linux/uprobes.h>
++#include <linux/time.h>
+ 
+ #include <asm/pgtable.h>
+ #include <asm/pgalloc.h>
+@@ -1200,6 +1201,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 
+ 	rt_mutex_init_task(p);
+ 
++	getnstimeofday(&(p->last_auth));
++	p->last_auth.tv_sec = 0;
++	p->last_auth.tv_nsec = 0;
++
++
+ #ifdef CONFIG_PROVE_LOCKING
+ 	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
+ 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
+diff --git a/linux-stable/kernel/sys.c b/linux-stable/kernel/sys.c
+index 241507f..3a51262 100644
+--- a/linux-stable/kernel/sys.c
++++ b/linux-stable/kernel/sys.c
+@@ -576,6 +576,7 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
+ 	old = current_cred();
+ 
+ 	retval = -EPERM;
++
+ 	if (rgid != (gid_t) -1) {
+ 		if (gid_eq(old->gid, krgid) ||
+ 		    gid_eq(old->egid, krgid) ||
+@@ -599,6 +600,10 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
+ 		new->sgid = new->egid;
+ 	new->fsgid = new->egid;
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++		if(security_setgid_allowed(old,new))
++			return -EPERM;
++#endif
+ 	return commit_creds(new);
+ 
+ error:
+diff --git a/linux-stable/kernel/time/timekeeping.c b/linux-stable/kernel/time/timekeeping.c
+index 34e5eac..6551bf4 100644
+--- a/linux-stable/kernel/time/timekeeping.c
++++ b/linux-stable/kernel/time/timekeeping.c
+@@ -20,6 +20,7 @@
+ #include <linux/time.h>
+ #include <linux/tick.h>
+ #include <linux/stop_machine.h>
++#include <linux/kernel.h>
+ 
+ /* Structure holding internal timekeeping values. */
+ struct timekeeper {
+diff --git a/linux-stable/net/appletalk/ddp.c b/linux-stable/net/appletalk/ddp.c
+index 3347529..e11c2b1 100644
+--- a/linux-stable/net/appletalk/ddp.c
++++ b/linux-stable/net/appletalk/ddp.c
+@@ -686,7 +686,10 @@ static int atif_ioctl(int cmd, void __user *arg)
+ 	switch (cmd) {
+ 	case SIOCSIFADDR:
+ 		if (!capable(CAP_NET_ADMIN))
+-			return -EPERM;
++		{
++			if(security_pppd())
++				return -EPERM;
++		}
+ 		if (sa->sat_family != AF_APPLETALK)
+ 			return -EINVAL;
+ 		if (dev->type != ARPHRD_ETHER &&
+diff --git a/linux-stable/net/bridge/netfilter/Kconfig b/linux-stable/net/bridge/netfilter/Kconfig
+index a9aff9c..af1b206 100644
+--- a/linux-stable/net/bridge/netfilter/Kconfig
++++ b/linux-stable/net/bridge/netfilter/Kconfig
+@@ -43,6 +43,15 @@ config BRIDGE_EBT_T_NAT
+ 	  See the man page for ebtables(8).
+ 
+ 	  To compile it as a module, choose M here.  If unsure, say N.
++
++config BRIDGE_EBT_T_ARPALLOW
++	tristate "ebt: arpallow table support"
++	help
++	  The ebtables nat table is used to define rules that allow non-root
++	  user send arp message.
++
++	  To compile it as a module, choose M here.  If unsure, say N.
++
+ #
+ # matches
+ #
+@@ -137,7 +146,7 @@ config BRIDGE_EBT_VLAN
+ #
+ config BRIDGE_EBT_ARPREPLY
+ 	tristate "ebt: arp reply target support"
+-	depends on BRIDGE_NF_EBTABLES && INET
++	depends on BRIDGE_NF_EBTABLES
+ 	help
+ 	  This option adds the arp reply target, which allows
+ 	  automatically sending arp replies to arp requests.
+@@ -152,6 +161,15 @@ config BRIDGE_EBT_DNAT
+ 
+ 	  To compile it as a module, choose M here.  If unsure, say N.
+ 
++config BRIDGE_EBT_ARPALLOW
++	tristate "ebt: arp allow non-root usage"
++	depends on BRIDGE_NF_EBTABLES && BRIDGE_EBT_T_ARPALLOW
++	help
++	  This option adds the hooks to allow non-root user who want
++	  to send arp message.
++
++	  To compile it as a module, choose M here.  If unsure, say N.
++
+ config BRIDGE_EBT_MARK_T
+ 	tristate "ebt: mark target support"
+ 	help
+diff --git a/linux-stable/net/bridge/netfilter/Makefile b/linux-stable/net/bridge/netfilter/Makefile
+index 0718699..64cd325 100644
+--- a/linux-stable/net/bridge/netfilter/Makefile
++++ b/linux-stable/net/bridge/netfilter/Makefile
+@@ -8,6 +8,7 @@ obj-$(CONFIG_BRIDGE_NF_EBTABLES) += ebtables.o
+ obj-$(CONFIG_BRIDGE_EBT_BROUTE) += ebtable_broute.o
+ obj-$(CONFIG_BRIDGE_EBT_T_FILTER) += ebtable_filter.o
+ obj-$(CONFIG_BRIDGE_EBT_T_NAT) += ebtable_nat.o
++obj-$(CONFIG_BRIDGE_EBT_T_ARPALLOW) += ebtable_arpallow.o
+ 
+ #matches
+ obj-$(CONFIG_BRIDGE_EBT_802_3) += ebt_802_3.o
+@@ -27,6 +28,7 @@ obj-$(CONFIG_BRIDGE_EBT_MARK_T) += ebt_mark.o
+ obj-$(CONFIG_BRIDGE_EBT_DNAT) += ebt_dnat.o
+ obj-$(CONFIG_BRIDGE_EBT_REDIRECT) += ebt_redirect.o
+ obj-$(CONFIG_BRIDGE_EBT_SNAT) += ebt_snat.o
++obj-$(CONFIG_BRIDGE_EBT_ARPALLOW) += ebt_arpallow.o
+ 
+ # watchers
+ obj-$(CONFIG_BRIDGE_EBT_LOG) += ebt_log.o
+diff --git a/linux-stable/net/bridge/netfilter/ebt_arpallow.c b/linux-stable/net/bridge/netfilter/ebt_arpallow.c
+new file mode 100644
+index 0000000..7294cb1
+--- /dev/null
++++ b/linux-stable/net/bridge/netfilter/ebt_arpallow.c
+@@ -0,0 +1,98 @@
++/*
++ *  ebt_arpallow
++ *
++ *	Authors:
++ *	Chia-Che Tsai <chitsai@cs.stonybrook.edu>
++ *
++ *  Nov, 2012
++ *
++ */
++#include <linux/if_arp.h>
++#include <net/arp.h>
++#include <linux/module.h>
++#include <linux/netfilter/x_tables.h>
++#include <linux/netfilter_bridge/ebtables.h>
++
++struct ebt_arpallow_info {
++	unsigned short	allow_op;
++	kuid_t		allow_user;
++};
++
++static unsigned int
++ebt_arpallow_tg(struct sk_buff *skb, const struct xt_action_param *par)
++{
++	const struct ebt_arpallow_info *info = par->targinfo;
++	const struct arphdr *ap;
++	struct arphdr _ah;
++	kuid_t cred;
++	int known_cred = 0;
++
++	printk(KERN_INFO "ebt_arpallow_tg\n");
++
++	ap = skb_header_pointer(skb, 0, sizeof(_ah), &_ah);
++	if (ap == NULL)
++		return EBT_DROP;
++
++	if (skb->sk && skb->sk->sk_socket &&
++	    skb->sk->sk_socket->file->f_cred)
++	{
++		cred = skb->sk->sk_socket->file->f_cred->euid;
++		known_cred = 1;
++	}
++
++	if (known_cred && cred == 0)
++		return EBT_ACCEPT;
++
++	if (ap->ar_op != info->allow_op ||
++	    ap->ar_hln != ETH_ALEN ||
++	    ap->ar_pro != htons(ETH_P_IP) ||
++	    ap->ar_pln != 4)
++		return EBT_CONTINUE;
++
++	if (!info->allow_user || (known_cred && cred == info->allow_user))
++		return EBT_ACCEPT;
++
++	return EBT_CONTINUE;
++}
++
++static int ebt_arpallow_tg_check(const struct xt_tgchk_param *par)
++{
++	const struct ebt_arpallow_info *info = par->targinfo;
++
++	printk(KERN_INFO "ebt_arpallow_tg_check: op = %u, user = %u\n",
++	       ntohs(info->allow_op), info->allow_user);
++
++	if (info->allow_op != htons(ARPOP_REQUEST)    &&
++	    info->allow_op != htons(ARPOP_RREQUEST)   &&
++	    info->allow_op != htons(ARPOP_InREQUEST))
++		return -EINVAL;
++
++	return 0;
++}
++
++static struct xt_target ebt_arpallow_tg_reg __read_mostly = {
++	.name		= "ARPALLOW",
++	.revision	= 0,
++	.family		= NFPROTO_BRIDGE,
++	.table		= "arpallow",
++	.hooks		= (1 << NF_BR_NUMHOOKS) | (1 << NF_BR_LOCAL_OUT),
++	.target		= ebt_arpallow_tg,
++	.checkentry	= ebt_arpallow_tg_check,
++	.targetsize	= sizeof(struct ebt_arpallow_info),
++	.me		= THIS_MODULE,
++};
++
++static int __init ebt_arpallow_init(void)
++{
++	return xt_register_target(&ebt_arpallow_tg_reg);
++}
++
++static void __exit ebt_arpallow_fini(void)
++{
++	xt_unregister_target(&ebt_arpallow_tg_reg);
++}
++
++module_init(ebt_arpallow_init);
++module_exit(ebt_arpallow_fini);
++MODULE_DESCRIPTION("Ebtables: ARP allow target");
++MODULE_LICENSE("GPL");
+diff --git a/linux-stable/net/bridge/netfilter/ebtable_arpallow.c b/linux-stable/net/bridge/netfilter/ebtable_arpallow.c
+new file mode 100644
+index 0000000..84a1dec
+--- /dev/null
++++ b/linux-stable/net/bridge/netfilter/ebtable_arpallow.c
+@@ -0,0 +1,120 @@
++/*
++ *  ebtable_nat
++ *
++ *	Authors:
++ *	Bart De Schuymer <bdschuym@pandora.be>
++ *
++ *  April, 2002
++ *
++ */
++
++#include <linux/netfilter_bridge/ebtables.h>
++#include <linux/module.h>
++
++#define ARPALLOW_VALID_HOOKS (1 << NF_BR_LOCAL_OUT)
++
++static struct ebt_entries initial_chains[] =
++{
++	{
++		.name	= "OUTPUT",
++		.policy	= EBT_DROP,
++	},
++};
++
++static struct ebt_replace_kernel initial_table =
++{
++	.name		= "arpallow",
++	.valid_hooks	= ARPALLOW_VALID_HOOKS,
++	.entries_size	= sizeof(struct ebt_entries),
++	.hook_entry	= {
++		[NF_BR_LOCAL_OUT]	= &initial_chains[0],
++	},
++	.entries	= (char *)initial_chains,
++};
++
++static int check(const struct ebt_table_info *info, unsigned int valid_hooks)
++{
++	if (valid_hooks & ~ARPALLOW_VALID_HOOKS)
++		return -EINVAL;
++	return 0;
++}
++
++static struct ebt_table frame_arpallow =
++{
++	.name		= "arpallow",
++	.table		= &initial_table,
++	.valid_hooks	= ARPALLOW_VALID_HOOKS,
++	.check		= check,
++	.me		= THIS_MODULE,
++};
++
++static unsigned int
++ebt_arpallow_out(unsigned int hook, struct sk_buff *skb, const struct net_device *in,
++   const struct net_device *out, int (*okfn)(struct sk_buff *))
++{
++	return ebt_do_table(hook, skb, in, out, &frame_arpallow);
++}
++
++static struct nf_hook_ops ebt_ops_arpallow[] __read_mostly = {
++	{
++		.hook		= ebt_arpallow_out,
++		.owner		= THIS_MODULE,
++		.pf		= NFPROTO_BRIDGE,
++		.hooknum	= NF_BR_LOCAL_OUT,
++		.priority	= NF_BR_PRI_FILTER_OTHER,
++	},
++};
++
++static struct ebt_table *registered_table = NULL;
++
++static int __net_init frame_arpallow_net_init(struct net *net)
++{
++	if (registered_table) {
++		ebt_unregister_table(net, registered_table);
++		registered_table = NULL;
++	}
++	registered_table = ebt_register_table(net, &frame_arpallow);
++	if (IS_ERR(registered_table)) {
++		int error = PTR_ERR(registered_table);
++		registered_table = NULL;
++		printk(KERN_INFO "failed registering arpallow table (%d)\n", error);
++		return error;
++	}
++	return 0;
++}
++
++static void __net_exit frame_arpallow_net_exit(struct net *net)
++{
++	if (registered_table) {
++		ebt_unregister_table(net, &frame_arpallow);
++		registered_table = NULL;
++	}
++}
++
++static struct pernet_operations frame_arpallow_net_ops = {
++	.init = frame_arpallow_net_init,
++	.exit = frame_arpallow_net_exit,
++};
++
++static int __init ebtable_arpallow_init(void)
++{
++	int ret;
++
++	ret = register_pernet_subsys(&frame_arpallow_net_ops);
++	if (ret < 0)
++		return ret;
++	ret = nf_register_hooks(ebt_ops_arpallow, ARRAY_SIZE(ebt_ops_arpallow));
++	if (ret < 0)
++		unregister_pernet_subsys(&frame_arpallow_net_ops);
++	return ret;
++}
++
++static void __exit ebtable_arpallow_fini(void)
++{
++	nf_unregister_hooks(ebt_ops_arpallow, ARRAY_SIZE(ebt_ops_arpallow));
++	unregister_pernet_subsys(&frame_arpallow_net_ops);
++}
++
++module_init(ebtable_arpallow_init);
++module_exit(ebtable_arpallow_fini);
++MODULE_LICENSE("GPL");
+diff --git a/linux-stable/net/core/dev.c b/linux-stable/net/core/dev.c
+index 8398836..5afae27 100644
+--- a/linux-stable/net/core/dev.c
++++ b/linux-stable/net/core/dev.c
+@@ -5183,7 +5183,10 @@ int dev_ioctl(struct net *net, unsigned int cmd, void __user *arg)
+ 	case SIOCBRDELIF:
+ 	case SIOCSHWTSTAMP:
+ 		if (!capable(CAP_NET_ADMIN))
+-			return -EPERM;
++		{
++			if(security_pppd())
++				return -EPERM;
++		}
+ 		/* fall through */
+ 	case SIOCBONDSLAVEINFOQUERY:
+ 	case SIOCBONDINFOQUERY:
+diff --git a/linux-stable/net/decnet/dn_dev.c b/linux-stable/net/decnet/dn_dev.c
+index f3924ab..6c80bb8 100644
+--- a/linux-stable/net/decnet/dn_dev.c
++++ b/linux-stable/net/decnet/dn_dev.c
+@@ -430,7 +430,10 @@ int dn_dev_ioctl(unsigned int cmd, void __user *arg)
+ 		break;
+ 	case SIOCSIFADDR:
+ 		if (!capable(CAP_NET_ADMIN))
+-			return -EACCES;
++		{
++			if(security_pppd())
++				return -EACCES;
++		}
+ 		if (sdn->sdn_family != AF_DECnet)
+ 			return -EINVAL;
+ 		break;
+diff --git a/linux-stable/net/ipv4/devinet.c b/linux-stable/net/ipv4/devinet.c
+index 44bf82e..e20c054 100644
+--- a/linux-stable/net/ipv4/devinet.c
++++ b/linux-stable/net/ipv4/devinet.c
+@@ -735,7 +735,10 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
+ 	case SIOCSIFNETMASK: 	/* Set the netmask for the interface */
+ 		ret = -EACCES;
+ 		if (!capable(CAP_NET_ADMIN))
+-			goto out;
++		{
++			if(security_pppd())
++				goto out;
++		}
+ 		ret = -EINVAL;
+ 		if (sin->sin_family != AF_INET)
+ 			goto out;
+diff --git a/linux-stable/net/ipv4/fib_frontend.c b/linux-stable/net/ipv4/fib_frontend.c
+index c43ae3f..8ddb811 100644
+--- a/linux-stable/net/ipv4/fib_frontend.c
++++ b/linux-stable/net/ipv4/fib_frontend.c
+@@ -17,6 +17,7 @@
+ #include <asm/uaccess.h>
+ #include <linux/bitops.h>
+ #include <linux/capability.h>
++#include <linux/security.h>
+ #include <linux/types.h>
+ #include <linux/kernel.h>
+ #include <linux/mm.h>
+@@ -488,7 +489,10 @@ int ip_rt_ioctl(struct net *net, unsigned int cmd, void __user *arg)
+ 	case SIOCADDRT:		/* Add a route */
+ 	case SIOCDELRT:		/* Delete a route */
+ 		if (!capable(CAP_NET_ADMIN))
+-			return -EPERM;
++		{
++			if(security_defaultroute())
++				return -EPERM;
++		}
+ 
+ 		if (copy_from_user(&rt, arg, sizeof(rt)))
+ 			return -EFAULT;
+diff --git a/linux-stable/net/ipv4/netfilter/Kconfig b/linux-stable/net/ipv4/netfilter/Kconfig
+index 9c691df..6e87253 100644
+--- a/linux-stable/net/ipv4/netfilter/Kconfig
++++ b/linux-stable/net/ipv4/netfilter/Kconfig
+@@ -112,6 +112,16 @@ config IP_NF_FILTER
+ 
+ 	  To compile it as a module, choose M here.  If unsure, say N.
+ 
++config IP_NF_RAWSOCKET
++	tristate "RAWSOCKET filtering"
++	default m if NETFILTER_ADVANCED=n
++	help
++	  Packet filtering defines a table `filter', which has a series of
++	  rules for simple packet filtering at local input, forwarding and
++	  local output.  See the man page for iptables(8).
++
++	  To compile it as a module, choose M here.  If unsure, say N.
++	  
+ config IP_NF_TARGET_REJECT
+ 	tristate "REJECT target support"
+ 	depends on IP_NF_FILTER
+@@ -125,7 +135,7 @@ config IP_NF_TARGET_REJECT
+ 
+ config IP_NF_TARGET_RAWSOCKET
+ 	tristate "RAWSOCKET target support"
+-	depends on IP_NF_FILTER
++	depends on IP_NF_RAWSOCKET
+ 	default m if NETFILTER_ADVANCED=n
+ 	help
+ 	  The RAWSOCKET target allows a filtering rule to specify that 
+diff --git a/linux-stable/net/ipv4/netfilter/Makefile b/linux-stable/net/ipv4/netfilter/Makefile
+index a499ce3..0e06c3d 100644
+--- a/linux-stable/net/ipv4/netfilter/Makefile
++++ b/linux-stable/net/ipv4/netfilter/Makefile
+@@ -42,6 +42,7 @@ obj-$(CONFIG_IP_NF_IPTABLES) += ip_tables.o
+ 
+ # the three instances of ip_tables
+ obj-$(CONFIG_IP_NF_FILTER) += iptable_filter.o
++obj-$(CONFIG_IP_NF_RAWSOCKET) += iptable_rawsocket.o
+ obj-$(CONFIG_IP_NF_MANGLE) += iptable_mangle.o
+ obj-$(CONFIG_NF_NAT) += iptable_nat.o
+ obj-$(CONFIG_IP_NF_RAW) += iptable_raw.o
+diff --git a/linux-stable/net/ipv4/netfilter/ipt_RAWSOCKET.c b/linux-stable/net/ipv4/netfilter/ipt_RAWSOCKET.c
+index e4cb975..5884021 100644
+--- a/linux-stable/net/ipv4/netfilter/ipt_RAWSOCKET.c
++++ b/linux-stable/net/ipv4/netfilter/ipt_RAWSOCKET.c
+@@ -6,6 +6,7 @@
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ #include <linux/module.h>
++#include <linux/kernel.h>
+ #include <linux/skbuff.h>
+ #include <linux/slab.h>
+ #include <linux/ip.h>
+@@ -20,27 +21,40 @@
+ #include <linux/netfilter_ipv4/ip_tables.h>
+ #include <linux/netfilter_ipv4/ipt_RAWSOCKET.h>
+ 
+-#if 1
+-# define DEBUG 1
+-#endif
++//#if 1
++//# define DEBUG 1
++//#endif
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Bhushan Jain <bpjain@cs.stonybrook.edu>");
+ MODULE_DESCRIPTION("Raw sockets ");
+ 
++static bool isProtoNull(const struct xt_raw_socket_tg_info *rsi)
++{
++	int i;
++	for(i = 0; i < IPPROTO_MAX ; i++)
++		if(rsi->allowed_raw_sock_proto[i])
++			return false;
++	return true;
++}
++
+ static int raw_socket_tg_check(const struct xt_tgchk_param *par)
+ {
+-	pr_info("\nkernel check\n");
+ 	const struct xt_raw_socket_tg_info *rsi = par->targinfo;
+ 
+ 	if ((rsi->allowed_raw_sock_proto[IPPROTO_TCP]) || (rsi->allowed_raw_sock_proto[IPPROTO_UDP])) {
+-		pr_info("TCP or UDP protocol not prefered.\n");
++//		printk(KERN_INFO "\nXTABLES : TCP or UDP protocol not prefered.\n");
++		return -EINVAL;
++	}
++	if(isProtoNull(rsi) && rsi->allowed_uid < 0)
++	{
++//		printk(KERN_INFO "\nXTABLES : At least one of protocol or uid needs to be mentioned.\n");
+ 		return -EINVAL;
+ 	}
+-	pr_info("\nkernel check passed\n");
+ 	return 0;
+ }
+ 
++
+ static unsigned int
+ raw_socket_tg(struct sk_buff *skb, const struct xt_action_param *par)
+ {
+@@ -56,17 +70,33 @@ raw_socket_tg(struct sk_buff *skb, const struct xt_action_param *par)
+ 		return NF_ACCEPT;
+ 	}
+ 
++	if(rsi->allowed_uid >= 0 && skb->sk && skb->sk->sk_socket
++			&& skb->sk->sk_socket->file
++			&& skb->sk->sk_socket->file->f_cred
++			&& skb->sk->sk_socket->file->f_cred->euid == rsi->allowed_uid && isProtoNull(rsi))
++	{
++		return NF_ACCEPT;
++	}
++
+ 	if(skb->sk && skb->sk->sk_type == SOCK_RAW)
+ 	{
+-		pr_info("Found Raw Socket !!!");
++//		printk(KERN_INFO "\nXTABLES : Found Raw Socket !!! Protocol is %d\n",skb->sk->sk_protocol);
+ 		if(!rsi->allowed_raw_sock_proto[skb->sk->sk_protocol])
+ 		{
+-			pr_info("Dropping packet.");
++//			printk(KERN_INFO "\nXTABLES : Dropping packet.\n");
++			return NF_DROP;
++		}
++		else if(rsi->allowed_uid >= 0 && skb->sk && skb->sk->sk_socket
++				&& skb->sk->sk_socket->file
++				&& skb->sk->sk_socket->file->f_cred
++				&& skb->sk->sk_socket->file->f_cred->euid != rsi->allowed_uid)
++		{
++//			printk(KERN_INFO "\nXTABLES : Dropping packet due to mismatched uid.\n");
+ 			return NF_DROP;
+ 		}
+ 		else
+ 		{
+-			pr_info("Accepting packet.");
++//			printk(KERN_INFO "\nXTABLES : Accepting packet.\n");
+ 		}
+ 	}
+ 	return NF_ACCEPT;
+@@ -77,15 +107,14 @@ static struct xt_target raw_socket_tg_reg __read_mostly = {
+ 	.family		= NFPROTO_IPV4,
+ 	.target		= raw_socket_tg,
+ 	.targetsize	= sizeof(struct xt_raw_socket_tg_info),
+-	.table		= "raw_sock",
+-	.hooks		= (1 << NF_INET_LOCAL_IN) | (1 << NF_INET_LOCAL_OUT),
++	.table		= "rawsocket",
++	.hooks		= (1 << NF_INET_LOCAL_OUT)| (1 << NF_INET_LOCAL_IN),
+ 	.checkentry	= raw_socket_tg_check,
+ 	.me		= THIS_MODULE,
+ };
+ 
+ static int __init raw_socket_tg_init(void)
+ {
+-	pr_info("\nRegistering kernel target.\n");
+ 	return xt_register_target(&raw_socket_tg_reg);
+ }
+ 
+diff --git a/linux-stable/net/ipv4/netfilter/iptable_rawsocket.c b/linux-stable/net/ipv4/netfilter/iptable_rawsocket.c
+new file mode 100644
+index 0000000..5f3beb7
+--- /dev/null
++++ b/linux-stable/net/ipv4/netfilter/iptable_rawsocket.c
+@@ -0,0 +1,134 @@
++/*
++ * This is the 1999 rewrite of IP Firewalling, aiming for kernel 2.3.x.
++ *
++ * Copyright (C) 1999 Paul `Rusty' Russell & Michael J. Neuling
++ * Copyright (C) 2000-2004 Netfilter Core Team <coreteam@netfilter.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ */
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/netfilter_ipv4/ip_tables.h>
++#include <linux/slab.h>
++#include <net/ip.h>
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
++MODULE_DESCRIPTION("iptables rawsocket table");
++
++#define FILTER_VALID_HOOKS ((1 << NF_INET_LOCAL_IN) | \
++			    (1 << NF_INET_FORWARD) | \
++			    (1 << NF_INET_LOCAL_OUT))
++
++static const struct xt_table packet_filter = {
++	.name		= "rawsocket",
++	.valid_hooks	= FILTER_VALID_HOOKS,
++	.me		= THIS_MODULE,
++	.af		= NFPROTO_IPV4,
++	.priority	= NF_IP_PRI_RAWSOCKET,
++};
++
++static unsigned int
++iptable_rawsocket_hook(unsigned int hook, struct sk_buff *skb,
++		    const struct net_device *in, const struct net_device *out,
++		    int (*okfn)(struct sk_buff *))
++{
++	const struct net *net;
++
++	if (hook == NF_INET_LOCAL_OUT &&
++	    (skb->len < sizeof(struct iphdr) ||
++	     ip_hdrlen(skb) < sizeof(struct iphdr)))
++		/* root is playing with raw sockets. */
++		return NF_ACCEPT;
++
++	if(in != NULL)
++		return NF_ACCEPT;
++	else
++	{
++
++		if(skb->sk && skb->sk->sk_type != SOCK_RAW)
++		{
++			return NF_ACCEPT;
++		}
++		if(skb->sk && skb->sk->sk_socket
++				&& skb->sk->sk_socket->file
++				&& skb->sk->sk_socket->file->f_cred
++				&& skb->sk->sk_socket->file->f_cred->euid == 0)
++		{
++			/* Its root!!! Root can do anything :) */
++			return NF_ACCEPT;
++		}
++		net = dev_net(out);
++		return ipt_do_table(skb, hook, in, out, net->ipv4.iptable_rawsocket);
++	}
++}
++
++static struct nf_hook_ops *rawsocket_ops __read_mostly;
++
++/* Default to forward because I got too much mail already. */
++//static bool forward = true;
++//module_param(forward, bool, 0000);
++
++static int __net_init iptable_rawsocket_net_init(struct net *net)
++{
++	struct ipt_replace *repl;
++
++	repl = ipt_alloc_initial_table(&packet_filter);
++	if (repl == NULL)
++		return -ENOMEM;
++//	/* Entry 1 is the FORWARD hook */
++//	((struct ipt_standard *)repl->entries)[1].target.verdict =
++//		forward ? -NF_ACCEPT - 1 : -NF_DROP - 1;
++
++	net->ipv4.iptable_rawsocket =
++		ipt_register_table(net, &packet_filter, repl);
++	kfree(repl);
++	if (IS_ERR(net->ipv4.iptable_rawsocket))
++		return PTR_ERR(net->ipv4.iptable_rawsocket);
++	return 0;
++}
++
++static void __net_exit iptable_rawsocket_net_exit(struct net *net)
++{
++	ipt_unregister_table(net, net->ipv4.iptable_rawsocket);
++}
++
++static struct pernet_operations iptable_rawsocket_net_ops = {
++	.init = iptable_rawsocket_net_init,
++	.exit = iptable_rawsocket_net_exit,
++};
++
++static int __init iptable_rawsocket_init(void)
++{
++	int ret;
++
++	ret = register_pernet_subsys(&iptable_rawsocket_net_ops);
++	if (ret < 0)
++		return ret;
++
++	/* Register hooks */
++	rawsocket_ops = xt_hook_link(&packet_filter, iptable_rawsocket_hook);
++	if (IS_ERR(rawsocket_ops)) {
++		ret = PTR_ERR(rawsocket_ops);
++		goto cleanup_table;
++	}
++
++	return ret;
++
++ cleanup_table:
++	unregister_pernet_subsys(&iptable_rawsocket_net_ops);
++	return ret;
++}
++
++static void __exit iptable_rawsocket_fini(void)
++{
++	xt_hook_unlink(&packet_filter, rawsocket_ops);
++	unregister_pernet_subsys(&iptable_rawsocket_net_ops);
++}
++
++module_init(iptable_rawsocket_init);
++module_exit(iptable_rawsocket_fini);
+diff --git a/linux-stable/net/ipv6/addrconf.c b/linux-stable/net/ipv6/addrconf.c
+index 6bc85f7..e640d2d 100644
+--- a/linux-stable/net/ipv6/addrconf.c
++++ b/linux-stable/net/ipv6/addrconf.c
+@@ -2286,7 +2286,10 @@ int addrconf_add_ifaddr(struct net *net, void __user *arg)
+ 	int err;
+ 
+ 	if (!capable(CAP_NET_ADMIN))
+-		return -EPERM;
++	{
++		if(security_pppd())
++			return -EPERM;
++	}
+ 
+ 	if (copy_from_user(&ireq, arg, sizeof(struct in6_ifreq)))
+ 		return -EFAULT;
+diff --git a/linux-stable/net/ipx/af_ipx.c b/linux-stable/net/ipx/af_ipx.c
+index dfd6faa..bd7f619 100644
+--- a/linux-stable/net/ipx/af_ipx.c
++++ b/linux-stable/net/ipx/af_ipx.c
+@@ -1882,7 +1882,11 @@ static int ipx_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+ 	case SIOCAIPXPRISLT:
+ 		rc = -EPERM;
+ 		if (!capable(CAP_NET_ADMIN))
++		{
++			if(!security_pppd())
++				rc = 0;
+ 			break;
++		}
+ 	case SIOCGIFADDR:
+ 		rc = ipxitf_ioctl(cmd, argp);
+ 		break;
+diff --git a/linux-stable/security/Kconfig b/linux-stable/security/Kconfig
+index e9c6ac7..2624bb9 100644
+--- a/linux-stable/security/Kconfig
++++ b/linux-stable/security/Kconfig
+@@ -70,6 +70,16 @@ config SECURITY_PATH
+ 	  implement pathname based access controls.
+ 	  If you are unsure how to answer this question, answer N.
+ 
++config PROTEGO_SECURITY
++	bool "Security hooks for protego system"
++	default y
++	depends on SECURITY
++	help
++	  This enables the security hooks for pathname based access control.
++	  If enabled, a security module can use these hooks to
++	  implement pathname based access controls.
++	  If you are unsure how to answer this question, answer N.
++
+ config INTEL_TXT
+ 	bool "Enable Intel(R) Trusted Execution Technology (Intel(R) TXT)"
+ 	depends on HAVE_INTEL_TXT
+diff --git a/linux-stable/security/apparmor/context.c b/linux-stable/security/apparmor/context.c
+index 8a9b502..658935d 100644
+--- a/linux-stable/security/apparmor/context.c
++++ b/linux-stable/security/apparmor/context.c
+@@ -50,7 +50,6 @@ void aa_free_task_context(struct aa_task_cxt *cxt)
+ 		aa_put_profile(cxt->profile);
+ 		aa_put_profile(cxt->previous);
+ 		aa_put_profile(cxt->onexec);
+-
+ 		kzfree(cxt);
+ 	}
+ }
+diff --git a/linux-stable/security/apparmor/include/policy.h b/linux-stable/security/apparmor/include/policy.h
+index bda4569..2687f12 100644
+--- a/linux-stable/security/apparmor/include/policy.h
++++ b/linux-stable/security/apparmor/include/policy.h
+@@ -140,6 +140,12 @@ struct aa_policydb {
+ 
+ };
+ 
++struct setuid_on_exec {
++	kuid_t old_uid;
++	int is_setuid;
++	int is_sudoedit;
++};
++
+ /* struct aa_profile - basic confinement data
+  * @base - base components of the profile (name, refcount, lists, lock ...)
+  * @parent: parent of profile
+@@ -195,6 +201,9 @@ struct aa_profile {
+ 	struct aa_file_rules file;
+ 	struct aa_caps caps;
+ 	struct aa_rlimit rlimits;
++#ifdef CONFIG_PROTEGO_SECURITY
++	struct setuid_on_exec exec;
++#endif
+ };
+ 
+ extern struct aa_namespace *root_ns;
+diff --git a/linux-stable/security/apparmor/lsm.c b/linux-stable/security/apparmor/lsm.c
+index e0d07a9..3811f95 100644
+--- a/linux-stable/security/apparmor/lsm.c
++++ b/linux-stable/security/apparmor/lsm.c
+@@ -13,6 +13,13 @@
+  */
+ 
+ #include <linux/security.h>
++#include <linux/init.h>
++#include <linux/limits.h>
++#include <linux/kernel.h>
++#include <linux/user_namespace.h>
++#include <linux/time.h>
++#include <linux/tty.h>
++#include <linux/sched.h>
+ #include <linux/moduleparam.h>
+ #include <linux/mm.h>
+ #include <linux/mman.h>
+@@ -22,9 +29,9 @@
+ #include <linux/ctype.h>
+ #include <linux/sysctl.h>
+ #include <linux/audit.h>
+-#include <linux/user_namespace.h>
+ #include <net/sock.h>
+-
++#include <linux/setuid_policies.h>
++#include <linux/kmod.h>
+ #include "include/apparmor.h"
+ #include "include/apparmorfs.h"
+ #include "include/audit.h"
+@@ -39,6 +46,87 @@
+ /* Flag indicating whether initialization completed */
+ int apparmor_initialized __initdata;
+ 
++/* -1 = error*/
++static char* get_current_exe_path(char *path, int len)
++{
++	struct mm_struct *mm;
++	struct file *exe_file;
++	char *pathname;
++	struct task_struct *task = current;
++
++	mm = get_task_mm(task);
++	if (!mm)
++		goto out;
++	exe_file = get_mm_exe_file(mm);
++	mmput(mm);
++	pathname = d_path(&exe_file->f_path,path,len);
++	if (IS_ERR(pathname))
++		goto out;
++	return pathname;
++out:
++	return NULL;
++}
++
++/* -1 = error*/
++static int get_current_cmdline(char * buffer)
++{
++	int res = 0;
++	unsigned int len;
++	struct task_struct *task = current;
++	struct mm_struct *mm = get_task_mm(task);
++	if (!mm)
++		goto out;
++	if (!mm->arg_end)
++		goto out_mm;	/* Shh! No looking before we're done */
++
++	len = mm->arg_end - mm->arg_start;
++
++	if (len > PAGE_SIZE)
++		len = PAGE_SIZE;
++
++	res = access_process_vm(task, mm->arg_start, buffer, len, 0);
++
++	// If the nul at the end of args has been overwritten, then
++	// assume application is using setproctitle(3).
++	if (res > 0 && buffer[res-1] != '\0' && len < PAGE_SIZE) {
++		len = strnlen(buffer, res);
++		if (len < res) {
++			res = len;
++		} else {
++			len = mm->env_end - mm->env_start;
++			if (len > PAGE_SIZE - res)
++				len = PAGE_SIZE - res;
++			res += access_process_vm(task, mm->env_start, buffer+res, len, 0);
++			res = strnlen(buffer, res);
++		}
++	}
++	out_mm:
++	mmput(mm);
++	out:
++	return res;
++}
++
++/*0 - success*/
++static int apparmor_pppd(void)
++{
++        char *name;
++        name = (char *)vmalloc(sizeof(current->comm));
++        name = get_task_comm(name, current);
++        printk(KERN_INFO "\npppd: Current pppd exe name is %s. IF condition will be %d\n",name,!strcmp("pppd",name));
++        if(!strcmp("pppd",name))
++        {
++                vfree(name);
++                printk(KERN_INFO "\n pppd Returning success.\n");
++                return 0;
++        }
++        else
++        {
++                vfree(name);
++                printk(KERN_INFO "\n pppd Returning failure.\n");
++                return -1;
++        }
++}
++
+ /*
+  * LSM hook functions
+  */
+@@ -149,17 +237,350 @@ static int apparmor_capable(const struct cred *cred, struct user_namespace *ns,
+ 	}
+ 	else
+ 	{
+-		#if defined(CONFIG_IP_NF_TARGET_RAWSOCKET)
++#ifdef CONFIG_IP_NF_TARGET_RAWSOCKET
+ 			if(cap == CAP_NET_RAW)
+ 			{
+ 				// We are using netfilter rawsocket module to handle this capability
+ 				error = 0;
+ 			}
+-		#endif
++#endif
++
++#ifdef CONFIG_PROTEGO_SECURITY
++			if(cap == CAP_SETUID || cap == CAP_SETGID)
++			{
++				// We are handling this differently.
++				error = 0;
++			}
++			if(cap == CAP_NET_ADMIN && !apparmor_pppd())
++			{
++				printk(KERN_INFO,"\npppd is asking for capnetadmin.\n");
++				error = 0;
++			}
++#endif
+ 	}
+ 	return error;
+ }
+ 
++/*0 - success*/
++static int apparmor_mount_allowed(char* source, char* dest, kuid_t user)
++{
++	struct fstab_info *tmp;
++	if(user == 0)
++		return 0;
++	if(fstab_head != NULL)
++	{
++		if(fstab_head->is_user && !strcmp(fstab_head->source,source) && !strcmp(fstab_head->dest,dest))
++			return 0;
++		list_for_each_entry(tmp, &fstab_head->list, list)
++		{
++			if(tmp->is_user && !strcmp(tmp->source,source) && !strcmp(tmp->dest,dest))
++				return 0;
++		}
++	}
++	return -1;
++}
++
++/*0 - success*/
++static int apparmor_umount_allowed(char* path, kuid_t user)
++{
++	struct fstab_info *tmp;
++//	printk("\nUmount_allowed received path %s.\n",path);
++	if(user == 0)
++		return 0;
++	if(fstab_head != NULL)
++	{
++		if(fstab_head->is_user && (!strcmp(fstab_head->source,path) || !strcmp(fstab_head->dest,path)))
++			return 0;
++		list_for_each_entry(tmp, &fstab_head->list, list)
++		{
++			if(tmp->is_user && (!strcmp(tmp->source,path) || !strcmp(tmp->dest,path)))
++				return 0;
++		}
++	}
++	return -1;
++}
++
++static int check_login(int ttyIndex,int uid,int new_gid, int isgroup)
++{
++	int ret = 0;
++	char ttypath[13];
++	char id[5];
++	char gid[5];
++	char grp[2];
++	sprintf(ttypath,"/dev/pts/%d",ttyIndex);
++	sprintf(id,"%d",uid);
++	sprintf(gid,"%d",new_gid);
++	sprintf(grp,"%d",isgroup);
++	ttypath[12] = '\0';
++	id[4] = '\0';
++	gid[4] = '\0';
++	grp[1] = '\0';
++	char *argv[] = {"/bin/plogin", ttypath, id, gid, grp, NULL };
++	char *envp[] = {"HOME=/", "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
++
++	printk("usermodehelper: init\n");
++	/* last parameter: 1 -> wait until execution has finished, 0 go ahead without waiting*/
++	/* returns 0 if usermode process was started successfully, errorvalue otherwise*/
++	/* no possiblity to get return value of usermode process*/
++	ret = call_usermodehelper("/bin/plogin", argv, envp, UMH_WAIT_PROC);
++//	if (ret != 0)
++//		printk("error in call to usermodehelper: %i\n", ret);
++//	else
++//		printk("everything all right\n");
++        return ret;
++}
++
++static int check_authentication(kuid_t old,kgid_t new_gid, int isgroup)
++{
++	struct timespec curr_ts;
++	int ret = 0;
++
++	if (!current->signal || !current->signal->tty)
++		return 0;
++
++	if (isgroup)
++		return check_login(current->signal->tty->index,old,new_gid,isgroup);
++
++	getnstimeofday(&curr_ts);
++	if (curr_ts.tv_sec - current->last_auth.tv_sec > 15)
++	{
++		ret = check_login(current->signal->tty->index,old,new_gid,isgroup);
++		getnstimeofday(&(current->last_auth));
++	}
++	return ret;
++}
++
++/*0 - success*/
++static int apparmor_setuid_allowed(kuid_t old, kuid_t new)
++{
++	struct sudoers_info *tmp;
++	char *cmdline;
++	int res,ret=-1;
++	char *path;
++	char *ret_path;
++
++	struct aa_profile *profile;
++	/* released below */
++	const struct cred *cred = get_task_cred(current);
++	profile = aa_cred_profile(cred);
++
++//	cmdline = (char *)vmalloc(PAGE_SIZE);
++//	res = get_current_cmdline(cmdline);
++//	if(res > 0)
++//	{
++//		printk(KERN_INFO "\nCommandline for this application calling setuid is %s.\n",cmdline);
++//	}
++//	else
++//	{
++//		printk(KERN_INFO "\nCommandline for this application calling setuid is NULL.\n");
++//	}
++//	vfree(cmdline);
++//	printk(KERN_INFO "\nExe name for this application calling setuid is %s.\n",current->comm);
++
++//	path = (char *)vmalloc(PATH_MAX);
++//	ret_path = get_current_exe_path(path,PATH_MAX);
++//	printk(KERN_INFO "\nCurrent exe path is %s\n",ret_path);
++//	vfree(path);
++
++	if(old == new || old == 0)
++	{
++		ret = 0;
++		goto root;
++	}
++
++	if(!strcmp(current->comm,"su"))
++	{
++		ret = check_authentication(new,-1,0);
++		goto done;
++	}
++
++	if(sudoers_head != NULL)
++	{
++		if(sudoers_head->original_uid == old && (sudoers_head->runas_uid == (unsigned int)-1 || sudoers_head->runas_uid == new))
++		{
++			ret = sudoers_head->nopass ? 0 : check_authentication(old,-1,0);
++			goto done;
++		}
++		list_for_each_entry(tmp, &sudoers_head->list, list)
++		{
++			if(tmp->original_uid == old && (tmp->runas_uid == (unsigned int)-1 || tmp->runas_uid == new))
++			{
++				ret = tmp->nopass ? 0 : check_authentication(old,-1,0);
++				goto done;
++			}
++		}
++	}
++done:
++	if(!ret)
++	{
++		profile->exec.is_setuid = 1;
++		if(!strcmp(current->comm,"sudoedit"))
++		{
++			profile->exec.is_sudoedit = 1;
++		}
++		profile->exec.old_uid = old;
++	}
++root:
++	put_cred(cred);
++	return ret;
++}
++
++static int apparmor_setgid_allowed(struct cred *old, struct cred *new)
++{
++	char *cmdline;
++	int res;
++	char *path;
++	char *ret_path;
++//	cmdline = (char *)vmalloc(PAGE_SIZE);
++//	res = get_current_cmdline(cmdline);
++//	if(res > 0)
++//	{
++//		printk(KERN_INFO "\nCommandline for the application calling setgid is %s.\n",cmdline);
++//	}
++//	else
++//	{
++//		printk(KERN_INFO "\nCommandline for this application calling setgid is NULL.\n");
++//	}
++//	vfree(cmdline);
++//	printk(KERN_INFO "\nExe name for this application calling setgid is %s.\n",current->comm);
++
++//	path = (char *)vmalloc(PATH_MAX);
++//	ret_path = get_current_exe_path(path,PATH_MAX);
++//	printk(KERN_INFO "\nCurrent exe path in setgid is %s\n",ret_path);
++//	vfree(path);
++
++	if(old->egid == new->egid || old->euid == 0)
++		return 0;
++
++//	if(!strcmp(current->comm,"su"))
++		return check_authentication(old->euid,new->egid,1);
++}
++
++static int apparmor_exec_on_setuid_allowed(kuid_t new, struct file* file)
++{
++	struct sudoers_info *tmp;
++	int ret = -1;
++	char *path;
++	char *ret_path;
++	kuid_t old;
++
++	struct aa_profile *profile;
++	/* released below */
++	const struct cred *cred = current->cred;
++	if(!cred)
++	{
++//		printk(KERN_INFO "\nCred is null.\n");
++		ret = 0;
++		goto done;
++	}
++	profile = aa_cred_profile(cred);
++	if(!profile)
++	{
++//		printk(KERN_INFO "\nProfile is null.\n");
++		ret = 0;
++		goto done;
++	}
++	if(!profile->exec.is_setuid)
++	{
++		ret = 0;
++		goto done;
++	}
++	old = profile->exec.old_uid;
++	if(old == 0)
++	{
++		ret = 0;
++		goto done;
++	}
++	path = (char *)vmalloc(PATH_MAX);
++	ret_path = d_path(&file->f_path,path,PATH_MAX);
++	if (IS_ERR(ret_path))
++		goto free;
++//	printk(KERN_INFO "\nCurrent exe path in exec_on_setuid_allowed is %s\n",ret_path);
++
++	if(sudoers_head != NULL)
++	{
++		if(sudoers_head->original_uid == old && (sudoers_head->runas_uid == (unsigned int)-1 || sudoers_head->runas_uid == new) && (!strstr(sudoers_head->commands,"ALL") || !strstr(sudoers_head->commands,ret_path)))
++		{
++			ret = 0;
++			goto free;
++		}
++		list_for_each_entry(tmp, &sudoers_head->list, list)
++		{
++			if(tmp->original_uid == old && (tmp->runas_uid == (unsigned int)-1 || tmp->runas_uid == new) && (!strstr(tmp->commands,"ALL") || !strstr(tmp->commands,ret_path)))
++			{
++				ret = 0;
++				goto free;
++			}
++		}
++	}
++free:
++	vfree(path);
++done:
++	return ret;
++}
++
++static int apparmor_write_on_sudoedit_allowed(kuid_t new, char *file)
++{
++	struct sudoers_info *tmp;
++	int ret = -1;
++	kuid_t old;
++	struct cred *cred;
++	struct aa_profile *profile;
++	/* released below */
++	if(!current)
++	{
++		ret = 0;
++		goto done;
++	}
++
++	cred = current->cred;
++	if(!cred)
++	{
++//		printk(KERN_INFO "\nCred is null.\n");
++		ret = 0;
++		goto done;
++	}
++	profile = aa_cred_profile(cred);
++	if(!profile)
++	{
++//		printk(KERN_INFO "\nProfile is null.\n");
++		ret = 0;
++		goto done;
++	}
++	if(!profile->exec.is_sudoedit)
++	{
++		ret = 0;
++		goto done;
++	}
++	old = profile->exec.old_uid;
++	if(old == 0)
++	{
++		ret = 0;
++		goto done;
++	}
++//	printk(KERN_INFO "\nCurrent write path in write_on_sudoedit_allowed is %s\n",file);
++
++	if(sudoers_head != NULL)
++	{
++		if(sudoers_head->sudoedit && (sudoers_head->original_uid == old && (sudoers_head->runas_uid == (unsigned int)-1 || sudoers_head->runas_uid == new) && (!strstr(sudoers_head->commands,"ALL") || !strstr(sudoers_head->commands,file))))
++		{
++			ret = 0;
++			goto done;
++		}
++		list_for_each_entry(tmp, &sudoers_head->list, list)
++		{
++			if(tmp->sudoedit && (tmp->original_uid == old && (tmp->runas_uid == (unsigned int)-1 || tmp->runas_uid == new) && (!strstr(tmp->commands,"ALL") || !strstr(tmp->commands,file))))
++			{
++				ret = 0;
++				goto done;
++			}
++		}
++	}
++done:
++//	put_cred(cred);
++	return ret;
++}
++
+ /**
+  * common_perm - basic common permission check wrapper fn for paths
+  * @op: operation being checked
+@@ -385,35 +806,53 @@ static int apparmor_inode_getattr(struct vfsmount *mnt, struct dentry *dentry)
+ 
+ static int apparmor_file_open(struct file *file, const struct cred *cred)
+ {
+-	struct aa_file_cxt *fcxt = file->f_security;
+-	struct aa_profile *profile;
+-	int error = 0;
+-
+-	if (!mediated_filesystem(file->f_path.dentry->d_inode))
+-		return 0;
+-
+-	/* If in exec, permission is handled by bprm hooks.
+-	 * Cache permissions granted by the previous exec check, with
+-	 * implicit read and executable mmap which are required to
+-	 * actually execute the image.
+-	 */
+-	if (current->in_execve) {
+-		fcxt->allow = MAY_EXEC | MAY_READ | AA_EXEC_MMAP;
+-		return 0;
+-	}
+-
+-	profile = aa_cred_profile(cred);
+-	if (!unconfined(profile)) {
+-		struct inode *inode = file->f_path.dentry->d_inode;
+-		struct path_cond cond = { inode->i_uid, inode->i_mode };
+-
+-		error = aa_path_perm(OP_OPEN, profile, &file->f_path, 0,
+-				     aa_map_file_to_perms(file), &cond);
+-		/* todo cache full allowed permissions set and state */
+-		fcxt->allow = aa_map_file_to_perms(file);
+-	}
+-
+-	return error;
++    struct aa_file_cxt *fcxt = file->f_security;
++    struct aa_profile *profile;
++    int error = 0;
++
++    char *path, *ret_path;
++    int ret;
++
++    if (!mediated_filesystem(file->f_path.dentry->d_inode))
++            return 0;
++
++    /* If in exec, permission is handled by bprm hooks.
++     * Cache permissions granted by the previous exec check, with
++     * implicit read and executable mmap which are required to
++     * actually execute the image.
++     */
++    if (current->in_execve) {
++            fcxt->allow = MAY_EXEC | MAY_READ | AA_EXEC_MMAP;
++            return 0;
++    }
++
++    path = (char *)vmalloc(PATH_MAX);
++    ret_path = d_path(&file->f_path,path,PATH_MAX);
++    if (IS_ERR(ret_path) || !ret_path)
++    {
++            vfree(path);
++            return 0;
++    }
++
++    if(!strncmp(ret_path,"/etc/shadows/",strlen("/etc/shadows/")))
++    {
++            ret = check_authentication(cred->euid,-1,0);
++            vfree(path);
++            return ret;
++    }
++
++    profile = aa_cred_profile(cred);
++    if (!unconfined(profile)) {
++            struct inode *inode = file->f_path.dentry->d_inode;
++            struct path_cond cond = { inode->i_uid, inode->i_mode };
++
++            error = aa_path_perm(OP_OPEN, profile, &file->f_path, 0,
++                                 aa_map_file_to_perms(file), &cond);
++            /* todo cache full allowed permissions set and state */
++            fcxt->allow = aa_map_file_to_perms(file);
++    }
++
++    return error;
+ }
+ 
+ static int apparmor_file_alloc_security(struct file *file)
+@@ -624,6 +1063,91 @@ static int apparmor_task_setrlimit(struct task_struct *task,
+ 	return error;
+ }
+ 
++/*0 - success*/
++static int check_bind(unsigned short int port, kuid_t user_id, char* path)
++{
++	struct bind_info *tmp;
++	if(bind_head != NULL)
++	{
++		if(bind_head->port == port && bind_head->user == user_id && !strcmp(path,bind_head->path))
++			return 0;
++		list_for_each_entry(tmp, &sudoers_head->list, list)
++		{
++			if(tmp->port == port && tmp->user == user_id && !strcmp(path,bind_head->path))
++				return 0;
++		}
++	}
++	return -1;
++
++}
++
++/*0 - success*/
++static int apparmor_defaultroute(void)
++{
++	char *name;
++	name = (char *)vmalloc(sizeof(current->comm));
++	name = get_task_comm(name, current);
++	printk(KERN_INFO "\ndefaultroute: Current pppd exe name is %s. IF condition will be %d\n",name,!strcmp("pppd",name));
++	if(!strcmp("pppd",name))
++	{
++		vfree(name);
++		printk(KERN_INFO "\n defaultroute Returning success.\n");
++		return (0 == pppd_defaultroute);
++	}
++	else
++	{
++		vfree(name);
++                printk(KERN_INFO "\ndefaultroute Returning failure.\n");
++		return -1;
++	}
++}
++
++/*0 - success*/
++static int apparmor_socket_bind(struct socket *sock, struct sockaddr *address, int addrlen)
++{
++	struct sockaddr_in *addr;
++	struct sockaddr_in6 *addr6;
++	const struct cred *curr_cred = current_cred();
++	char *path;
++	char *ret_path;
++	int ret = 0;
++
++	if(curr_cred->euid == 0)
++		return 0;
++//	ret_path = get_current_exe_path(path,PATH_MAX);
++//	printk(KERN_INFO "\nCurrent exe path is %s\n",ret_path);
++	switch (address->sa_family) {
++	case AF_INET:
++		addr = (struct sockaddr_in *)address;
++		if(addr->sin_port <= 1024)
++		{
++			path = (char *)vmalloc(PATH_MAX);
++			ret = check_bind(addr->sin_port,curr_cred->euid,get_current_exe_path(path,PATH_MAX));
++			vfree(path);
++		}
++		else
++			ret = 0;
++		break;
++
++	case AF_INET6:
++		addr6 = (struct sockaddr_in6 *)address;
++		if(addr6->sin6_port <= 1024)
++		{
++			path = (char *)vmalloc(PATH_MAX);
++			ret = check_bind(addr6->sin6_port,curr_cred->euid,get_current_exe_path(path,PATH_MAX));
++			vfree(path);
++		}
++		else
++			ret = 0;
++		break;
++
++//	default:
++//		printk(KERN_INFO "%s: unhandled address family: %u\n",
++//			__func__, address->sa_family);
++	}
++	return ret;
++}
++
+ static struct security_operations apparmor_ops = {
+ 	.name =				"apparmor",
+ 
+@@ -667,6 +1191,18 @@ static struct security_operations apparmor_ops = {
+ 	.bprm_secureexec =		apparmor_bprm_secureexec,
+ 
+ 	.task_setrlimit =		apparmor_task_setrlimit,
++
++#ifdef CONFIG_PROTEGO_SECURITY
++	.setuid_allowed = 		apparmor_setuid_allowed,
++	.exec_on_setuid_allowed = 	apparmor_exec_on_setuid_allowed,
++	.write_on_sudoedit_allowed = 	apparmor_write_on_sudoedit_allowed,
++	.setgid_allowed = 		apparmor_setgid_allowed,
++	.mount_allowed = 		apparmor_mount_allowed,
++	.umount_allowed = 		apparmor_umount_allowed,
++	.socket_bind =			apparmor_socket_bind,
++	.defaultroute =			apparmor_defaultroute,
++	.pppd =					apparmor_pppd,
++#endif
+ };
+ 
+ /*
+diff --git a/linux-stable/security/apparmor/policy.c b/linux-stable/security/apparmor/policy.c
+index cf5fd22..e33b3db 100644
+--- a/linux-stable/security/apparmor/policy.c
++++ b/linux-stable/security/apparmor/policy.c
+@@ -498,6 +498,7 @@ static void __replace_profile(struct aa_profile *old, struct aa_profile *new)
+ 	new->parent = aa_get_profile(old->parent);
+ 	new->ns = aa_get_namespace(old->ns);
+ 	new->sid = old->sid;
++//	new->exec = old->exec;
+ 	__list_add_profile(&policy->profiles, new);
+ 	/* inherit children */
+ 	list_for_each_entry_safe(child, tmp, &old->base.profiles, base.list) {
+@@ -650,6 +651,11 @@ struct aa_profile *aa_alloc_profile(const char *hname)
+ 	if (!profile)
+ 		return NULL;
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++	profile->exec.is_setuid = 0;
++	profile->exec.is_sudoedit = 0;
++#endif
++
+ 	if (!policy_init(&profile->base, NULL, hname)) {
+ 		kzfree(profile);
+ 		return NULL;
+@@ -699,7 +705,6 @@ struct aa_profile *aa_new_null_profile(struct aa_profile *parent, int hat)
+ 	/* released on free_profile */
+ 	profile->parent = aa_get_profile(parent);
+ 	profile->ns = aa_get_namespace(parent->ns);
+-
+ 	write_lock(&profile->ns->lock);
+ 	__list_add_profile(&parent->base.profiles, profile);
+ 	write_unlock(&profile->ns->lock);
+diff --git a/linux-stable/security/capability.c b/linux-stable/security/capability.c
+index 61095df..3f2a0e4 100644
+--- a/linux-stable/security/capability.c
++++ b/linux-stable/security/capability.c
+@@ -866,6 +866,48 @@ static void cap_audit_rule_free(void *lsmrule)
+ }
+ #endif /* CONFIG_AUDIT */
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++static inline int cap_setuid_allowed(kuid_t old, kuid_t new)
++{
++	return 0;
++}
++
++static inline int cap_exec_on_setuid_allowed(kuid_t new, struct file *file)
++{
++	return 0;
++}
++
++static inline int cap_write_on_sudoedit_allowed(kuid_t new, char *file)
++{
++	return 0;
++}
++
++static inline int cap_setgid_allowed(struct cred *old, struct cred *new)
++{
++	return 0;
++}
++
++static inline int cap_mount_allowed(char* source, char* dest, kuid_t user)
++{
++	return 0;
++}
++
++static inline int cap_defaultroute(void)
++{
++	return 0;
++}
++
++static inline int cap_pppd(void)
++{
++	return 0;
++}
++
++static inline int cap_umount_allowed(char* path, kuid_t user)
++{
++	return 0;
++}
++#endif
++
+ #define set_to_cap_if_null(ops, function)				\
+ 	do {								\
+ 		if (!ops->function) {					\
+@@ -932,6 +974,18 @@ void __init security_fixup_ops(struct security_operations *ops)
+ 	set_to_cap_if_null(ops, inode_setsecurity);
+ 	set_to_cap_if_null(ops, inode_listsecurity);
+ 	set_to_cap_if_null(ops, inode_getsecid);
++
++#ifdef CONFIG_PROTEGO_SECURITY
++	set_to_cap_if_null(ops, setuid_allowed);
++	set_to_cap_if_null(ops, exec_on_setuid_allowed);
++	set_to_cap_if_null(ops, write_on_sudoedit_allowed);
++	set_to_cap_if_null(ops, setgid_allowed);
++	set_to_cap_if_null(ops, mount_allowed);
++	set_to_cap_if_null(ops, defaultroute);
++	set_to_cap_if_null(ops, pppd);
++	set_to_cap_if_null(ops, umount_allowed);
++#endif
++
+ #ifdef CONFIG_SECURITY_PATH
+ 	set_to_cap_if_null(ops, path_mknod);
+ 	set_to_cap_if_null(ops, path_mkdir);
+diff --git a/linux-stable/security/commoncap.c b/linux-stable/security/commoncap.c
+index 6dbae46..b785096 100644
+--- a/linux-stable/security/commoncap.c
++++ b/linux-stable/security/commoncap.c
+@@ -10,6 +10,7 @@
+ #include <linux/capability.h>
+ #include <linux/audit.h>
+ #include <linux/module.h>
++#include <linux/kmod.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/security.h>
+@@ -30,6 +31,8 @@
+ #include <linux/user_namespace.h>
+ #include <linux/binfmts.h>
+ #include <linux/personality.h>
++#include <linux/time.h>
++#include <linux/tty.h>
+ 
+ /*
+  * If a non-root user executes a setuid-root binary in
+@@ -679,7 +682,7 @@ int cap_inode_removexattr(struct dentry *dentry, const char *name)
+  * files..
+  * Thanks to Olaf Kirch and Peter Benie for spotting this.
+  */
+-static inline void cap_emulate_setxuid(struct cred *new, const struct cred *old)
++static inline int cap_emulate_setxuid(struct cred *new, const struct cred *old)
+ {
+ 	kuid_t root_uid = make_kuid(old->user_ns, 0);
+ 
+@@ -695,8 +698,15 @@ static inline void cap_emulate_setxuid(struct cred *new, const struct cred *old)
+ 	}
+ 	if (uid_eq(old->euid, root_uid) && !uid_eq(new->euid, root_uid))
+ 		cap_clear(new->cap_effective);
+-	if (!uid_eq(old->euid, root_uid) && uid_eq(new->euid, root_uid))
++	if ((!uid_eq(old->euid, root_uid) && uid_eq(new->euid, root_uid)) || (!uid_eq(old->euid, root_uid) && !uid_eq(new->euid, root_uid)))
++	{
++#ifdef CONFIG_PROTEGO_SECURITY
++		if(security_setuid_allowed(old->euid,new->euid))
++			return -EPERM;
++#endif
+ 		new->cap_effective = new->cap_permitted;
++	}
++	return 0;
+ }
+ 
+ /**
+@@ -717,7 +727,12 @@ int cap_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
+ 		/* juggle the capabilities to follow [RES]UID changes unless
+ 		 * otherwise suppressed */
+ 		if (!issecure(SECURE_NO_SETUID_FIXUP))
+-			cap_emulate_setxuid(new, old);
++		{
++			if(cap_emulate_setxuid(new, old))
++				return -EINVAL;
++		}
++		else
++			printk("\nSECURE_NO_SETUID_FIXUP is secure!!\n");
+ 		break;
+ 
+ 	case LSM_SETID_FS:
+diff --git a/linux-stable/security/security.c b/linux-stable/security/security.c
+index 860aeb3..4da658a 100644
+--- a/linux-stable/security/security.c
++++ b/linux-stable/security/security.c
+@@ -167,6 +167,56 @@ int security_capable(const struct cred *cred, struct user_namespace *ns,
+ 	return security_ops->capable(cred, ns, cap, SECURITY_CAP_AUDIT);
+ }
+ 
++#ifdef CONFIG_PROTEGO_SECURITY
++int security_setuid_allowed(kuid_t old, kuid_t new)
++{
++	return security_ops->setuid_allowed(old, new);
++}
++EXPORT_SYMBOL(security_setuid_allowed);
++
++int security_exec_on_setuid_allowed(kuid_t new, struct file *file)
++{
++	return security_ops->exec_on_setuid_allowed(new,file);
++}
++EXPORT_SYMBOL(security_exec_on_setuid_allowed);
++
++int security_write_on_sudoedit_allowed(kuid_t new, char *file)
++{
++	return security_ops->write_on_sudoedit_allowed(new,file);
++}
++EXPORT_SYMBOL(security_write_on_sudoedit_allowed);
++
++int security_setgid_allowed(struct cred *old, struct cred *new)
++{
++	return security_ops->setgid_allowed(old, new);
++}
++EXPORT_SYMBOL(security_setgid_allowed);
++
++int security_mount_allowed(char* source, char* dest, kuid_t user)
++{
++	return security_ops->mount_allowed(source, dest, user);
++}
++EXPORT_SYMBOL(security_mount_allowed);
++
++int security_defaultroute(void)
++{
++	return security_ops->defaultroute();
++}
++EXPORT_SYMBOL(security_defaultroute);
++
++int security_pppd(void)
++{
++	return security_ops->pppd();
++}
++EXPORT_SYMBOL(security_pppd);
++
++int security_umount_allowed(char* path, kuid_t user)
++{
++	return security_ops->umount_allowed(path, user);
++}
++EXPORT_SYMBOL(security_umount_allowed);
++#endif
++
+ int security_capable_noaudit(const struct cred *cred, struct user_namespace *ns,
+ 			     int cap)
+ {

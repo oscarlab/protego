@@ -1,0 +1,8 @@
+The \fBRAWSOCKET\fP target will allow the specified protocol outgoing packet on a raw socket.
+.TP
+\fB\-\-allow\fP \fIprotocol\fP
+Use the protocol value from linux/in.h.
+.PP
+To allow ICMP and IGMP packets:
+.PP
+\-A OUTPUT \-j RAWSOCKET \-\-allow 1 \-\-allow 2

@@ -1,0 +1,40 @@
+Raw socket:
+Why are raw socket used?
+Linux kernel has support for only TCP and UDP protocols with support for ICMP reply. However, in order to support other ip-based protocols, linux provides a mechanism of raw-sockets.
+
+http://www.linuxchix.org/content/courses/security/raw_sockets
+Raw mode is basically there to allow you to bypass some of the way that your computer handles TCP/IP. Rather than going through the normal layers of encapsulation/decapsulation that the TCP/IP stack on the kernel does, you just pass the packet to the application that needs it. No TCP/IP processing -- so it's not a processed packet, it's a raw packet. The application that's using the packet is now responsible for stripping off the headers, analyzing the packet, all the stuff that the TCP/IP stack in the kernel normally does for you.
+A raw socket is a socket that takes packets, bypasses the normal TCP/IP processing, and sends them to the application that wants them.
+
+
+What is security threat?
+An attacker can use raw sockets to launch spoofed packet and bad packet attacks. Also, raw sockets can be used to masquerade any network service even on the privileged ports 0-1024.
+
+How does kernel enforce security?
+Linux kernel uses capabilities to limit the permission to use raw socket. At the time of creation, kernel checks if the requesting process has the "CAP_NET_RAW" capability. A process gains this capability by executing a binary file on which "CAP_NET_RAW" capability is set. Such a process has the capability enabile for the lifetime of the process.
+
+What is the problem with the current security enforcement?
+The problem with capabilities is that the program being executed is unaware of the capabilities owned by the task.
+
+Some currently-SUID programs are aware of them being (potentially)
+SUID, and will drop the "more privileged" euid when it is no longer
+needed, but they will probably not be aware of them possessing
+capabilities.  This may result in larger parts of the programs
+(sometimes orders of magnitude larger) running with elevated privileges
+(or with allowed-to-be-elevated privileges, which is a privilege on its
+own and is usable through vulnerabilities that allow for arbitrary code
+execution).
+Besides, dropping the capability might [need to] require privileges
+beyond CAP_NET_RAW itself.
+
+This mostly just sweeps the SUID root under the rug, where the sysadmin
+will hopefully not see it and thus feel safer.  However, it may expose
+more problems in the programs if they knew to drop root, but wouldn't
+know to drop the capabilities 
+
+What do we propose?
+Our solution is to take a different approach than setuid permission flags or file capabilities so as to achieve the principle of least privilege.
+
+
+-Disable capability checking
+-iptables

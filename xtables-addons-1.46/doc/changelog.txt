@@ -1,0 +1,503 @@
+
+HEAD
+====
+
+
+v1.46 (2012-08-23)
+==================
+Fixes:
+- length2, SYSRQ, RAWNAT: preinitialize values for ipv6_find_hdr
+- TARPIT: fix memory leak when tarpit_generic() fails
+- build: remove extraneous closing bracket in configure.ac
+- doc: update xt_SYSRQ.man to reflect that the full IPv6 address is needed
+Enhancements:
+- Support for Linux 3.6
+
+
+v1.45 (2012-07-16)
+==================
+Fixes:
+- build: export missing functions
+  (fixes: "WARNING 'xtnu_ipv6_find_hdr' [xt_TARPIT.ko] not found")
+- build: avoid use of unexported functions
+  (fixes: "WARNING 'ipv6_find_hdr' [xt_TARPIT.ko] not found"
+  in <= linux-2.6.37)
+
+
+v1.44 (2012-07-15)
+==================
+Fixes:
+- SYSRQ: fix double target initialization at module load
+- build: do not attempt to build IPv6 parts if CONFIG_IP6_NF_IPTABLES=n
+Enhancements:
+- TARPIT gained IPv6 support
+
+
+v1.43 (2012-06-30)
+==================
+Fixes:
+- xt_psd: avoid crash due to curr->next corruption
+Changes:
+- xt_psd: reject invalid match options
+Enhancements:
+- Support for Linux 3.5
+- DNETMAP: new type: static binding
+- DNETMAP: new persistent flag option for prefix
+- DNETMAP: add write support to procfs interface
+
+
+v1.42 (2012-04-05)
+==================
+Fixes:
+- compat_xtables: fixed mistranslation of checkentry return values
+  (affected kernels < 2.6.23)
+- xt_SYSRQ: fix compile error when crypto is turned off
+Changes:
+- ipset6-genl has been dropped from the tree;
+  the libmnl build-time dependency is thus no longer needed
+Enhancements:
+- Support for Linux 3.3, 3.4
+
+
+v1.41 (2012-01-04)
+==================
+Changes:
+- Deactivate build of ipset-genl by default.
+  I think the original ipset package can now take over, given there are
+  a handful of kernels (2.6.39 onwards) that do not need patching.
+Enhancements:
+- Support for Linux 3.2
+
+
+v1.40 (2011-11-30)
+==================
+Fixes:
+- build: the code actually requires at least iptables 1.4.5 (would yield a
+  compile error otherwise), make sure configure checks for it; update INSTALL
+- xt_ECHO: fix kernel warning about RTAX_HOPLIMIT being used
+- xt_ipv4options: fix an infinite loop
+Changes:
+- xt_ECHO: now calculates UDP checksum
+- Linux kernel versions below 2.6.32 are no longer officially
+  supported, and will not be part of compilation testing.
+- update to ipset 6.10
+Enhancements:
+- xt_ECHO: IPv6 support
+
+
+v1.39 (2011-09-21)
+==================
+Fixes:
+- libxt_ACCOUNT: fix compilation after missing libxtables_CFLAGS
+- build: fix compilation after missing libxtables_CFLAGS in submodules
+- build: add missing linux/version.h includes where needed
+Changes:
+- Remove unsupported ipset 4.x from the Xtables-addons distribution
+- ipset: move ipset_errcode from src to library to avoid undefined reference
+- update to ipset 6.9.1
+
+
+v1.38 (2011-08-20)
+==================
+- xt_CHECKSUM: abort build when the feature is already provided by mainline
+- xt_SYSRQ: fix UDPLITE header lookup in IPv6
+- xt_TARPIT: fix kernel warning about RTAX_HOPLIMIT being used
+- xt_TEE: abort build when the feature is already provided by mainline
+- xt_ipp2p: support UDPLITE
+- xt_pknock: support UDPLITE
+- xt_psd: restore functionality with UDP
+- xt_psd: support UDPLITE
+- update to ipset 6.8
+- support for Linux 3.1
+
+
+v1.37 (2011-06-25)
+==================
+Fixes:
+- xt_SYSRQ: make IPv6 trigger work again
+- xt_SYSRQ: improve security: include host address in digest
+- xt_TARPIT: fix a kernel oops in --reset mode
+
+
+v1.36 (2011-06-03)
+==================
+Changes:
+- xt_geoip: avoid recursive function calls
+- xt_TARPIT: unlock for use in all tables
+- xt_TARPIT: honeypot and reset modes
+- update to ipset 6.7
+- support for Linux 3.0
+
+
+v1.35 (2011-04-11)
+==================
+Enhancements:
+- update to ipset 6.3
+  * allow "new" as a commad alias to "create"
+  * resolving IP addresses did not work at listing/saving sets, fixed
+  * check ICMP and ICMPv6 with the set match and target in the testsuite
+  * avoid possible syntax clashing at saving hostnames
+  * fix linking with CONFIG_IPV6=n
+  * sctp, udplite support for the hash:*port* types
+- ipset-genl: handle EAGAIN return value emitted from autoloader
+- ipset-genl: resolve nfgenmsg remains and fix spurious protocol abort
+
+
+v1.34 (2011-04-07)
+==================
+Fixes:
+- xt_pknock: avoid crash when hash TFM could not be allocated
+- xt_pknock: avoid inversion of rule lookup that led to warnings
+- xt_DNETMAP: add missing module alias
+- xt_DNETMAP: support for kernels below 2.6.34
+Changes:
+- Linux kernel versions below 2.6.29 are no longer officially
+  supported, and will not be part of compilation testing.
+
+
+v1.33 (2011-02-02)
+==================
+Fixes:
+- build: restore functionality of `configure --without-kbuild`
+- build: fix objdir builds for ipset-5 (xt-a specific)
+- build: fix missing inclusion of dependency rules
+- xt_LOGMARK: fix detection of untracked connection for Linux >= 2.6.36
+Enhancements:
+- IPv6 support for xt_geoip
+- Update to ipset 5.3
+  * make IPv4 and IPv6 address handling similar
+  * show correct line numbers in restore output for parser errors
+- Update to ipset 5.4
+  * fixed ICMP and ICMPv6 handling
+  * fixed trailing whitespaces and pr_* messages
+  * fixed module loading at create/header commands
+- build: support for Linux up to 2.6.38
+- build: preliminary support for iptables 1.4.11
+
+
+v1.32 (2011-01-04)
+==================
+Fixes:
+- Update to ipset 4.5
+  * the iptreemap type used wrong gfp flags when deleting entries
+- Include ipset 5.2 with genetlink patch (beta)
+  * no kernel patch needed, but requires Linux >= 2.6.35
+    and thus needs to be manually enabled in mconfig
+
+
+v1.31 (2010-11-05)
+==================
+Fixes:
+- build: improve detection of kernel version and error handling
+Changes:
+- build: automatically derive Xtables module directory, thus
+  --with-xtlibdir is no longer needed for ./configure in most cases
+  (If I still see a distro using it, I will scold you for not
+  reading this changelog.)
+Enhancements:
+- LOGMARK: print remaining lifetime of cts
+- xt_iface: allow matching against incoming/outgoing interface
+- libxt_gradm: match packets based on status of grsecurity RBAC
+  (userspace part only - xt_gradm is in the grsec patch)
+
+
+v1.30 (2010-010-02)
+===================
+Fixes:
+- update to ipset 4.4
+  * ipport{,ip,net}hash did not work with mixed "src" and "dst"
+    destination parameters
+Changes:
+- deactivate building xt_TEE and xt_CHECKSUM by default, as these have been
+  merged upstream in Linux 2.6.35 and 2.6.36, respectively.
+  Distros still wishing to build this need to enable it in their build
+  script, e.g. perl -i -pe 's{^build_TEE=.*}{build_TEE=m}' mconfig;
+
+
+v1.29 (2010-09-29)
+==================
+- compat_xtables: return bool for match_check and target_check in 2.6.23..34
+- ipset: enable building of ip_set_ipport{ip,net}hash.ko
+- support for Linux 2.6.36
+- SYSRQ: resolve compile error with Linux 2.6.36
+- TEE: resolve compile error with Linux 2.6.36
+- add workaround for broken linux-glibc-devel 2.6.34 userspace headers
+  ("implicit declaration of function 'ALIGN'")
+
+
+v1.28 (2010-07-24)
+==================
+- RAWNAT: IPv6 variants erroneously rejected masks /33-/128
+- new target xt_CHECKSUM
+- xt_length2: add support for IPv6 jumbograms
+- xt_geoip: fix possible out-of-bounds access
+- import xt_geoip database scripts
+
+
+v1.27 (2010-05-16)
+==================
+- further updates for the upcoming 2.6.35 changes
+
+
+v1.26 (2010-04-30)
+==================
+- compat_xtables: fix 2.6.34 compile error due to a typo
+
+
+v1.25 (2010-04-26)
+==================
+- TEE: do rechecksumming in PREROUTING too
+- TEE: decrease TTL on cloned packet
+- TEE: set dont-fragment on cloned packets
+- TEE: free skb when route lookup failed
+- TEE: do not limit use to mangle table
+- TEE: do not retain iif and mark on cloned packet
+- TEE: new loop detection logic
+- TEE: use less expensive pskb_copy
+- condition: remove unnecessary RCU protection
+
+
+v1.24 (2010-03-17)
+==================
+- build: fix build of userspace modules against old (pre-2.6.25)
+  headers from linux-glibc-devel (/usr/include/linux)
+- ipp2p: updated bittorent command recognition
+- SYSRQ: let module load when crypto is unavailable
+- SYSRQ: allow processing of UDP-Lite
+
+
+v1.23 (2010-02-24)
+==================
+- build: support for Linux 2.6.34
+- build: remove unused --with-ksource option
+- build: remove unneeded --with-xtables option
+- build: fix compilations in RAWNAT, SYSRQ and length2 when CONFIG_IPV6=n
+- ipset: update to 4.2
+- ECHO: fix compilation w.r.t. skb_dst
+
+
+v1.22 (2010-01-22)
+==================
+- compat_xtables: support for 2.6.33 skb_iif changes
+- geoip: for FHS compliance use /usr/share/xt_geoip instead of /var/geoip
+- ipset: enable build of ip_set_setlist.ko
+- quota2: add the --no-change mode
+
+
+v1.21 (2009-12-09)
+==================
+- ACCOUNT: avoid collision with arp_tables setsockopt numbers
+- doc: fix option mismatch --gw/--gateway in libxt_TEE.man
+
+
+v1.20 (2009-11-19)
+==================
+- ipp2p: add more boundary checks
+- ipp2p: fix Gnutelle line ending detection
+- LOGMARK: remove unknown options from manpage
+- ACCOUNT: endianess-correctness
+- ipset: install manpage
+- ipset: fast forward to v4.1
+
+
+v1.19 (2009-10-12)
+==================
+- build: compile fixes for 2.6.31-rt
+- build: support for Linux 2.6.32
+- ipp2p: try to address underflows
+- psd: avoid potential crash when dealing with non-linear skbs
+- merge xt_ACCOUNT userspace utilities
+- added reworked xt_pknock module
+  Changes from pknock v0.5:
+  - pknock: "strict" and "checkip" flags were not displayed in `iptables -L`
+  - pknock: the GC expire time's lower bound is now the default gc time
+    (65000 msec) to avoid rendering anti-spoof protection in SPA mode useless
+  - pknock: avoid crash on memory allocation failure and fix memleak
+  - pknock: avoid fillup of peer table during DDoS
+  - pknock: automatic closing of ports
+  - pknock: make non-zero time mandatory for TCP mode
+  - pknock: display only pknock mode and state relevant information in procfs
+  - pknock: check interknock time only for !ST_ALLOWED peers
+  - pknock: preserve time/autoclose values for rules added in
+    reverse/arbitrary order
+  - pknock: add a manpage
+
+
+v1.18 (2009-09-09)
+==================
+- build: support for Linux 2.6.31
+- ipset: fast forward to v3.2
+- quota2: support anonymous counters
+- quota2: reduce memory footprint for anonymous counters
+- quota2: extend locked period during cleanup (locking bugfix)
+- quota2: use strtoull instead of strtoul
+- merged xt_ACCOUNT module
+- merged xt_psd module
+
+
+v1.17 (2009-06-16)
+==================
+- IPMARK: print missing --shift parameter
+- build: use readlink -f in extensions/ipset/
+- build: support for Linux 2.6.30
+
+
+v1.16 (2009-05-27)
+==================
+- RAWNAT: make iptable_rawpost compile with 2.6.30-rc5
+- ipset: fast forward to 3.0
+
+
+v1.15 (2009-04-30)
+==================
+- build: add kernel version check to configure
+- condition: compile fix for 2.6.30-rc
+- condition: fix intrapositional negation sign
+- fuzzy: fix bogus comparison logic leftover from move to new 1.4.3 API
+- ipp2p: fix bogus varargs call
+- ipp2p: fix typo in error message
+- added "iface" match
+- added rawpost table (for use with RAWNAT)
+- added RAWSNAT/RAWDNAT targets
+
+
+v1.14 (2009-03-31)
+==================
+- fuzzy: need to account for kernel-level modified variables in .userspacesize
+- geoip: remove XT_ALIGN from .userspacesize when used with offsetof
+- SYSRQ: ignore non-UDP packets
+- SYSRQ: do proper L4 header access in IPv6 code
+  (must not use tcp/udp_hdr in input path)
+- add "STEAL" target
+- dhcpmac: rename from dhcpaddr
+
+
+v1.13 (2009-03-23)
+==================
+- added a reworked ipv4options match
+- upgrade to iptables 1.4.3 API
+
+
+v1.12 (2009-03-07)
+==================
+- ipset: fix for compilation with 2.6.29-rt
+- ipset: fast forward to 2.5.0
+- rename xt_portscan to xt_lscan ("low-level scan") because
+  "portscan" as a word caused confusion
+- xt_LOGMARK: print incoming interface index
+- revert "TEE: do not use TOS for routing"
+- xt_TEE: resolve unknown symbol error with CONFIG_IPV6=n
+- xt_TEE: enable routing by iif, nfmark and flowlabel
+
+
+v1.10 (2009-02-18)
+==================
+- compat: compile fixes for 2.6.29
+- ipset: upgrade to ipset 2.4.9
+
+
+v1.9 (2009-01-30)
+=================
+- add the xt_length2 extension
+- xt_TEE: remove intrapositional '!' support
+- ipset: upgrade to ipset 2.4.7
+
+
+v1.8 (2009-01-10)
+=================
+- xt_TEE: IPv6 support
+- xt_TEE: do not include TOS value in routing decision
+- xt_TEE: fix switch-case inversion for name/IP display
+- xt_ipp2p: update manpages and help text
+- xt_ipp2p: remove log flooding
+- xt_portscan: update manpage about --grscan option caveats
+
+
+v1.7 (2008-12-25)
+=================
+- xt_ECHO: compile fix
+- avoid the use of "_init" which led to compile errors on some installations
+- build: do not unconditionally install ipset
+- doc: add manpages for xt_ECHO and xt_TEE
+- xt_ipp2p: kazaa detection code cleanup
+- xt_ipp2p: fix newline inspection in kazaa detection
+- xt_ipp2p: ensure better array bounds checking
+- xt_SYSRQ: improve security by hashing password
+
+
+v1.6 (2008-11-18)
+=================
+- build: support for Linux 2.6.17
+- build: compile fixes for 2.6.18 and 2.6.19
+- xt_ECHO: resolve compile errors in xt_ECHO
+- xt_ipp2p: parenthesize unaligned-access macros
+
+
+v1.5.7 (2008-09-01)
+===================
+- API layer: fix use of uninitialized 'hotdrop' variable
+- API layer: move to pskb-based signatures
+- xt_SYSRQ: compile fixes for Linux <= 2.6.19
+- ipset: adjust semaphore.h include for Linux >= 2.6.27
+- build: automatically run `depmod -a` on installation
+- add reworked xt_fuzzy module
+- add DHCP address match and mangle module
+- xt_portscan: IPv6 support
+- xt_SYSRQ: add missing module aliases
+
+
+v1.5.5 (2008-08-03)
+===================
+- manpage updates for xt_CHAOS, xt_IPMARK; README updates
+- build: properly recognize external Kbuild/Mbuild files
+- build: remove dependency on CONFIG_NETWORK_SECMARK
+- add the xt_SYSRQ target
+- add the xt_quota2 extension
+- import ipset extension group
+
+
+v1.5.4.1 (2008-04-26)
+=====================
+- build: fix compile error for 2.6.18-stable
+
+
+v1.5.4 (2008-04-09)
+===================
+- build: support building multiple files with one config option
+- API layer: add check for pskb relocation
+- doc: generate manpages
+- xt_ECHO: catch skb_linearize out-of-memory condition
+- xt_LOGMARK: add hook= and ctdir= fields in dump
+- xt_LOGMARK: fix comma output in ctstatus= list
+- xt_TEE: fix address copying bug
+- xt_TEE: make skb writable before attempting checksum update
+- add reworked xt_condition match
+- add reworked xt_ipp2p match
+- add reworked xt_IPMARK target
+
+
+v1.5.3 (2008-03-22)
+===================
+- support for Linux 2.6.18
+- add xt_ECHO sample target
+- add reworked xt_geoip match
+
+
+v1.5.2 (2008-03-04)
+===================
+- build: support for GNU make < 3.81 which does not have $(realpath)
+
+
+v1.5.1 (2008-02-21)
+===================
+- build: allow user to select what extensions to compile and install
+- build: allow external proejcts to be downloaded into the tree
+- xt_LOGMARK: dump classify mark, ctstate and ctstatus
+- add xt_CHAOS, xt_DELUDE and xt_portscan from Chaostables
+
+
+v1.5.0 (2008-02-11)
+===================
+Initial release with:
+- extensions: xt_LOGMARK, xt_TARPIT, xt_TEE
+- support for Linux >= 2.6.19

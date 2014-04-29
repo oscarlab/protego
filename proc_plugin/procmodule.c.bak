@@ -1,0 +1,101 @@
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/proc_fs.h>
+#include <linux/string.h>
+#include <linux/vmalloc.h>
+#include <asm/uaccess.h>
+
+
+/*
+  claims no such dir:
+        #include <linux/setuid_policies.h>
+        but structs defined here
+*/
+
+/* misc module info */
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Setuid and mount data");
+MODULE_AUTHOR("sllewely");
+
+#define MAX_SIZE PAGE_SIZE
+
+/* declarations here for now -- create header file */
+int init_setuid_module(void);
+void cleanup_setuid_module(void);
+//void remove_proc_entry(const char *name, struct proc_dir_entry *parent);
+ssize_t module_write(struct file *filp, const char __user *buff, unsigned long len, void *data);
+int module_read(char *page, char **start, off_t off, int count, int *eof, void *data);
+
+
+/* static variables */
+static struct proc_dir_entry *proc_entry;
+
+
+
+/* initialize module */
+int init_setuid_module(void) {
+        int ret = 0;
+        struct proc_dir_entry *policy_dir, *setuid_dir, *mount_dir;
+
+        /* 
+           initialize lists for struct sudoers_info and fstab_info
+           Use vmalloc(data);
+        if (!data)
+                ret = -ENOMEM;
+        memset(staticvar, 0, MAX_SIZE);
+
+         */
+
+        /* create the dir policy/ */
+        policy_dir = proc_mkdir("policy", NULL);
+        /* create the setuid/ and mount/ directories */
+        setuid_dir = proc_mkdir("setuid", policy_dir);
+        mount_dir = proc_mkdir("mount", policy_dir);
+
+        /* this is an entry with the name "item1" */
+        proc_entry = create_proc_entry("item1", 0644, setuid_dir);
+        if (proc_entry == NULL) {
+                ret = -ENOMEM;
+        } else {
+                proc_entry->read_proc = module_read;
+                proc_entry->write_proc = module_write;
+        }
+
+        return ret;
+}
+
+/* clean up module */
+void cleanup_setuid_module(void) {
+        /* free all data structures
+           Use vfree(void *addr)
+         */
+}
+
+
+/* define module enter and exit */
+module_init(init_setuid_module);
+module_exit(cleanup_setuid_module);
+
+
+/* write to the data structure */
+ssize_t module_write(struct file *filp, const char __user *buff, unsigned long len, void *data) {
+        /* can use:
+        int mod_write(struct file *filp, const char __user *buff, unsigned long len, void *data);
+        */
+
+        return len;
+}
+
+/* read from the data structure */
+int module_read(char *page, char **start, off_t off, int count, int *eof, void *data) {
+        int len;
+
+        /* can use:
+        int mod_read(char *page, char **start, off_t off, int count, int *eof, void *data);
+        */
+
+        len = 0;
+
+        return len;
+}
+
